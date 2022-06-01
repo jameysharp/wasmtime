@@ -3326,6 +3326,7 @@ dependencies = [
  "wasi-cap-std-sync",
  "wasmparser",
  "wasmtime-cache",
+ "wasmtime-component-derive",
  "wasmtime-cranelift",
  "wasmtime-environ",
  "wasmtime-fiber",
@@ -3449,6 +3450,15 @@ dependencies = [
  "pretty_env_logger",
  "rayon",
  "wasmtime",
+]
+
+[[package]]
+name = "wasmtime-component-derive"
+version = "0.38.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]

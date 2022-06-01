@@ -1104,6 +1104,7 @@ impl<T> StoreInner<T> {
     }
 }
 
+#[doc(hidden)]
 impl StoreOpaque {
     pub fn bump_resource_counts(&mut self, module: &Module) -> Result<()> {
         fn bump(slot: &mut usize, max: usize, amt: usize, desc: &str) -> Result<()> {

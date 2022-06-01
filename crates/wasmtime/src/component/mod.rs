@@ -10,11 +10,17 @@ mod store;
 pub use self::component::Component;
 pub use self::func::{ComponentParams, ComponentValue, Func, Op, TypedFunc, WasmList, WasmStr};
 pub use self::instance::Instance;
+pub use wasmtime_component_derive::ComponentEnum;
 
 // These items are expected to be used by an eventual
 // `#[derive(ComponentValue)]`, they are not part of Wasmtime's API stability
 // guarantees
 #[doc(hidden)]
-pub use {self::func::Memory, wasmtime_environ};
+pub mod private {
+    pub use super::func::{desc, Memory, MemoryMut};
+    pub use crate::store::StoreOpaque;
+    pub use anyhow;
+    pub use wasmtime_environ::component::{ComponentTypes, InterfaceType};
+}
 
 pub(crate) use self::store::ComponentStoreData;

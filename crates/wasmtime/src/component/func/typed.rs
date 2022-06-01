@@ -1891,7 +1891,102 @@ macro_rules! impl_component_ty_for_tuples {
 
 for_each_function_signature!(impl_component_ty_for_tuples);
 
-fn desc(ty: &InterfaceType) -> &'static str {
+struct TestRecord {
+    a: i32,
+    b: u32,
+}
+
+unsafe impl ComponentValue for TestRecord {
+    type Lower = [ValRaw; 2];
+
+    fn typecheck(ty: &InterfaceType, types: &ComponentTypes, op: Op) -> Result<()> {
+        match ty {
+            InterfaceType::Record(r) => {
+                let record = &types[*r];
+                if record.fields.len() != 2 {
+                    bail!(
+                        "expected record of {} fields, found {} fields",
+                        2,
+                        record.fields.len()
+                    );
+                }
+                let mut record = record.fields.iter();
+                <i32 as ComponentValue>::typecheck(&record.next().unwrap().ty, types, op)?;
+                <u32 as ComponentValue>::typecheck(&record.next().unwrap().ty, types, op)?;
+                debug_assert!(record.next().is_none());
+                Ok(())
+            }
+            other => bail!("expected `record` found `{}`", desc(other)),
+        }
+    }
+
+    fn lower<T>(
+        &self,
+        store: &mut StoreContextMut<T>,
+        func: &Func,
+        dst: &mut MaybeUninit<Self::Lower>,
+    ) -> Result<()> {
+        self.a.lower(store, func, map_maybe_uninit!(dst[0]))?;
+        self.b.lower(store, func, map_maybe_uninit!(dst[1]))?;
+        Ok(())
+    }
+
+    #[inline]
+    fn size() -> usize {
+        let mut size = 0;
+        size = align_to(size, i32::align()) + i32::size();
+        size = align_to(size, u32::align()) + u32::size();
+        size
+    }
+
+    #[inline]
+    fn align() -> u32 {
+        let mut align = 1;
+        align = align.max(i32::align());
+        align = align.max(u32::align());
+        align
+    }
+
+    fn store<T>(&self, memory: &mut MemoryMut<'_, T>, mut offset: usize) -> Result<()> {
+        // TODO: this requires that `offset` is aligned which we may not
+        // want to do
+        offset = align_to(offset, i32::align());
+        self.a.store(memory, offset)?;
+        offset += i32::size();
+
+        offset = align_to(offset, u32::align());
+        self.b.store(memory, offset)?;
+        offset += u32::size();
+
+        drop(offset); // silence warning about last assignment
+        Ok(())
+    }
+
+    #[inline]
+    fn lift(store: &StoreOpaque, func: &Func, src: &Self::Lower) -> Result<Self> {
+        Ok(Self {
+            a: <i32 as ComponentValue>::lift(store, func, &src[0])?,
+            b: <u32 as ComponentValue>::lift(store, func, &src[1])?,
+        })
+    }
+
+    fn load(memory: &Memory<'_>, bytes: &[u8]) -> Result<Self> {
+        let mut _offset = 0;
+
+        _offset = align_to(_offset, i32::align());
+        let a = i32::load(memory, &bytes[_offset..][..i32::size()])?;
+        _offset += i32::size();
+
+        _offset = align_to(_offset, u32::align());
+        let b = u32::load(memory, &bytes[_offset..][..u32::size()])?;
+        _offset += u32::size();
+
+        Ok(Self { a, b })
+    }
+}
+
+/// Returns a short description of the given type.
+pub fn desc(ty: &InterfaceType) -> &'static str {
     match ty {
         InterfaceType::U8 => "u8",
         InterfaceType::S8 => "s8",
