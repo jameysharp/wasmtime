@@ -37,6 +37,7 @@ fn expand_enum(input: DeriveInput) -> Result<TokenStream> {
 
     let mut lower = TokenStream::new();
     let mut lift = TokenStream::new();
+    let mut names = Vec::with_capacity(variants);
     for (idx, variant) in body.variants.iter().enumerate() {
         if let syn::Fields::Unit = variant.fields {
         } else {
@@ -54,6 +55,23 @@ fn expand_enum(input: DeriveInput) -> Result<TokenStream> {
         let ident = &variant.ident;
         lower.extend(quote!(#name::#ident => #idx,));
         lift.extend(quote!(#idx => Ok(#name::#ident),));
+
+        let ident = ident.to_string();
+        let mut wasm_name = String::with_capacity(ident.len() * 2);
+        for part in ident.split_inclusive(char::is_uppercase) {
+            let mut chars = part.chars();
+            let upper = chars.next_back().unwrap(); // ident must be non-empty
+            if !upper.is_uppercase() {
+                wasm_name.push_str(part);
+                break;
+            }
+            wasm_name.push_str(chars.as_str());
+            if !wasm_name.is_empty() {
+                wasm_name.push('-');
+            }
+            wasm_name.extend(upper.to_lowercase());
+        }
+        names.push(wasm_name);
     }
 
     let expanded = quote! {
@@ -65,11 +83,16 @@ fn expand_enum(input: DeriveInput) -> Result<TokenStream> {
                 types: &#private::ComponentTypes,
                 _op: wasmtime::component::Op,
             ) -> #private::anyhow::Result<()> {
+                static expected_names: &[&str] = &[#(#names),*];
                 match ty {
                     #private::InterfaceType::Enum(t) => {
-                        let variants = types[*t].names.len();
+                        let names = &*types[*t].names;
+                        let variants = names.len();
                         if variants != #variants {
                             #private::anyhow::bail!("expected enum with {} names, found {} names", #variants, variants);
+                        }
+                        if let Some((expected, actual)) = expected_names.iter().zip(names).find(|(a, b)| a != b) {
+                            #private::anyhow::bail!("expected enum variant named {}, found variant named {}", expected, actual);
                         }
                         Ok(())
                     }

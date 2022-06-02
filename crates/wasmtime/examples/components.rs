@@ -2,8 +2,11 @@ use wasmtime::component::ComponentEnum;
 
 #[derive(ComponentEnum)]
 enum TestEnum {
-    A,
-    B,
+    ANameWithManyWords,
+    BCDE,
+    //C(),
+    //D(u32),
+    //E { a: u32 },
 }
 
 /*
