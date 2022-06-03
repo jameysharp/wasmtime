@@ -1593,6 +1593,33 @@ fn typecheck_tuple(
     }
 }
 
+/// Verify that the given wasm type is a record with the expected fields in the right order, and
+/// having the right names.
+#[inline]
+pub fn typecheck_record(
+    ty: &InterfaceType,
+    types: &ComponentTypes,
+    op: Op,
+    expected: &[(&str, fn(&InterfaceType, &ComponentTypes, Op) -> Result<()>)],
+) -> Result<()> {
+    match ty {
+        InterfaceType::Record(r) => {
+            let record = &types[*r];
+            if record.fields.len() != expected.len() {
+                bail!("expected record of {} fields, found {} fields", expected.len(), record.fields.len());
+            }
+            for (field, &(name, check)) in record.fields.iter().zip(expected) {
+                check(&field.ty, types, op)?;
+                if field.name != name {
+                    bail!("expected record field named {}, found {}", name, field.name);
+                }
+            }
+            Ok(())
+        }
+        other => bail!("expected `record` found `{}`", desc(other)),
+    }
+}
+
 unsafe impl<T> ComponentValue for Option<T>
 where
     T: ComponentValue,
@@ -1896,46 +1923,27 @@ struct TestRecord {
     b: u32,
 }
 
+#[derive(Clone, Copy)]
+struct TestRecordLower {
+    a: <i32 as ComponentValue>::Lower,
+    b: <u32 as ComponentValue>::Lower,
+}
+
 unsafe impl ComponentValue for TestRecord {
-    type Lower = [ValRaw; 2];
+    type Lower = TestRecordLower;
 
     fn typecheck(ty: &InterfaceType, types: &ComponentTypes, op: Op) -> Result<()> {
-        match ty {
-            InterfaceType::Record(r) => {
-                let record = &types[*r];
-                if record.fields.len() != 2 {
-                    bail!(
-                        "expected record of {} fields, found {} fields",
-                        2,
-                        record.fields.len()
-                    );
-                }
-                let mut record = record.fields.iter();
-                <i32 as ComponentValue>::typecheck(&record.next().unwrap().ty, types, op)?;
-                <u32 as ComponentValue>::typecheck(&record.next().unwrap().ty, types, op)?;
-                debug_assert!(record.next().is_none());
-                Ok(())
-            }
-            other => bail!("expected `record` found `{}`", desc(other)),
-        }
-    }
-
-    fn lower<T>(
-        &self,
-        store: &mut StoreContextMut<T>,
-        func: &Func,
-        dst: &mut MaybeUninit<Self::Lower>,
-    ) -> Result<()> {
-        self.a.lower(store, func, map_maybe_uninit!(dst[0]))?;
-        self.b.lower(store, func, map_maybe_uninit!(dst[1]))?;
-        Ok(())
+        typecheck_record(ty, types, op, &[
+            ("a", <i32 as ComponentValue>::typecheck),
+            ("b", <u32 as ComponentValue>::typecheck),
+        ])
     }
 
     #[inline]
     fn size() -> usize {
         let mut size = 0;
-        size = align_to(size, i32::align()) + i32::size();
-        size = align_to(size, u32::align()) + u32::size();
+        next_field::<i32>(&mut size);
+        next_field::<u32>(&mut size);
         size
     }
 
@@ -1947,40 +1955,36 @@ unsafe impl ComponentValue for TestRecord {
         align
     }
 
-    fn store<T>(&self, memory: &mut MemoryMut<'_, T>, mut offset: usize) -> Result<()> {
-        // TODO: this requires that `offset` is aligned which we may not
-        // want to do
-        offset = align_to(offset, i32::align());
-        self.a.store(memory, offset)?;
-        offset += i32::size();
-
-        offset = align_to(offset, u32::align());
-        self.b.store(memory, offset)?;
-        offset += u32::size();
-
-        drop(offset); // silence warning about last assignment
+    fn lower<T>(
+        &self,
+        store: &mut StoreContextMut<T>,
+        func: &Func,
+        dst: &mut MaybeUninit<Self::Lower>,
+    ) -> Result<()> {
+        self.a.lower(store, func, map_maybe_uninit!(dst.a))?;
+        self.b.lower(store, func, map_maybe_uninit!(dst.b))?;
         Ok(())
     }
 
-    #[inline]
+    fn store<T>(&self, memory: &mut MemoryMut<'_, T>, mut offset: usize) -> Result<()> {
+        // TODO: this requires that `offset` is aligned which we may not
+        // want to do
+        self.a.store(memory, next_field::<i32>(&mut offset))?;
+        self.b.store(memory, next_field::<u32>(&mut offset))?;
+        Ok(())
+    }
+
     fn lift(store: &StoreOpaque, func: &Func, src: &Self::Lower) -> Result<Self> {
         Ok(Self {
-            a: <i32 as ComponentValue>::lift(store, func, &src[0])?,
-            b: <u32 as ComponentValue>::lift(store, func, &src[1])?,
+            a: <i32 as ComponentValue>::lift(store, func, &src.a)?,
+            b: <u32 as ComponentValue>::lift(store, func, &src.b)?,
         })
     }
 
     fn load(memory: &Memory<'_>, bytes: &[u8]) -> Result<Self> {
-        let mut _offset = 0;
-
-        _offset = align_to(_offset, i32::align());
-        let a = i32::load(memory, &bytes[_offset..][..i32::size()])?;
-        _offset += i32::size();
-
-        _offset = align_to(_offset, u32::align());
-        let b = u32::load(memory, &bytes[_offset..][..u32::size()])?;
-        _offset += u32::size();
-
+        let mut offset = 0;
+        let a = i32::load(memory, &bytes[next_field::<i32>(&mut offset)..][..i32::size()])?;
+        let b = u32::load(memory, &bytes[next_field::<u32>(&mut offset)..][..u32::size()])?;
         Ok(Self { a, b })
     }
 }
