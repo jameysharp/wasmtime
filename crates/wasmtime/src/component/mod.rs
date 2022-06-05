@@ -17,7 +17,7 @@ pub use wasmtime_component_derive::*;
 // guarantees
 #[doc(hidden)]
 pub mod private {
-    pub use super::func::{desc, next_field, typecheck_tuple, typecheck_record, Memory, MemoryMut};
+    pub use super::func::{next_field, typecheck_enum, typecheck_record, Memory, MemoryMut};
     pub use crate::store::StoreOpaque;
     pub use anyhow;
     pub use wasmtime_environ::component::{ComponentTypes, InterfaceType};

@@ -1606,7 +1606,11 @@ pub fn typecheck_record(
         InterfaceType::Record(r) => {
             let record = &types[*r];
             if record.fields.len() != expected.len() {
-                bail!("expected record of {} fields, found {} fields", expected.len(), record.fields.len());
+                bail!(
+                    "expected record of {} fields, found {} fields",
+                    expected.len(),
+                    record.fields.len()
+                );
             }
             for (field, &(name, check)) in record.fields.iter().zip(expected) {
                 check(&field.ty, types, op)?;
@@ -1617,6 +1621,31 @@ pub fn typecheck_record(
             Ok(())
         }
         other => bail!("expected `record` found `{}`", desc(other)),
+    }
+}
+
+/// Verify that the given wasm type is an enum with the expected variants in the right order, and
+/// having the right names.
+#[inline]
+pub fn typecheck_enum(ty: &InterfaceType, types: &ComponentTypes, expected: &[&str]) -> Result<()> {
+    match ty {
+        InterfaceType::Enum(e) => {
+            let names = &*types[*e].names;
+            if names.len() != expected.len() {
+                bail!(
+                    "expected enum of {} variants, found {} variants",
+                    expected.len(),
+                    names.len()
+                );
+            }
+            for (variant, &name) in names.iter().zip(expected) {
+                if variant != name {
+                    bail!("expected enum variant named {}, found {}", name, variant);
+                }
+            }
+            Ok(())
+        }
+        other => bail!("expected `enum` found `{}`", desc(other)),
     }
 }
 
@@ -1933,10 +1962,15 @@ unsafe impl ComponentValue for TestRecord {
     type Lower = TestRecordLower;
 
     fn typecheck(ty: &InterfaceType, types: &ComponentTypes, op: Op) -> Result<()> {
-        typecheck_record(ty, types, op, &[
-            ("a", <i32 as ComponentValue>::typecheck),
-            ("b", <u32 as ComponentValue>::typecheck),
-        ])
+        typecheck_record(
+            ty,
+            types,
+            op,
+            &[
+                ("a", <i32 as ComponentValue>::typecheck),
+                ("b", <u32 as ComponentValue>::typecheck),
+            ],
+        )
     }
 
     #[inline]
@@ -1983,8 +2017,14 @@ unsafe impl ComponentValue for TestRecord {
 
     fn load(memory: &Memory<'_>, bytes: &[u8]) -> Result<Self> {
         let mut offset = 0;
-        let a = i32::load(memory, &bytes[next_field::<i32>(&mut offset)..][..i32::size()])?;
-        let b = u32::load(memory, &bytes[next_field::<u32>(&mut offset)..][..u32::size()])?;
+        let a = i32::load(
+            memory,
+            &bytes[next_field::<i32>(&mut offset)..][..i32::size()],
+        )?;
+        let b = u32::load(
+            memory,
+            &bytes[next_field::<u32>(&mut offset)..][..u32::size()],
+        )?;
         Ok(Self { a, b })
     }
 }

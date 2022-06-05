@@ -83,31 +83,7 @@ fn expand_enum(input: DeriveInput) -> Result<TokenStream> {
                 types: &#private::ComponentTypes,
                 _op: wasmtime::component::Op,
             ) -> #private::anyhow::Result<()> {
-                static expected_names: &[&str] = &[#(#names),*];
-                match ty {
-                    #private::InterfaceType::Enum(t) => {
-                        let names = &*types[*t].names;
-                        let variants = names.len();
-                        if variants != #variants {
-                            #private::anyhow::bail!("expected enum with {} names, found {} names", #variants, variants);
-                        }
-                        if let Some((expected, actual)) = expected_names.iter().zip(names).find(|(a, b)| a != b) {
-                            #private::anyhow::bail!("expected enum variant named {}, found variant named {}", expected, actual);
-                        }
-                        Ok(())
-                    }
-                    other => #private::anyhow::bail!("expected `enum` found `{}`", #private::desc(other)),
-                }
-            }
-
-            fn lower<T>(
-                &self,
-                _store: &mut wasmtime::StoreContextMut<T>,
-                _func: &wasmtime::component::Func,
-                dst: &mut std::mem::MaybeUninit<Self::Lower>,
-            ) -> #private::anyhow::Result<()> {
-                dst.write(wasmtime::ValRaw::i32(match self { #lower } as i32));
-                Ok(())
+                #private::typecheck_enum(ty, types, &[#(#names),*])
             }
 
             #[inline]
@@ -120,12 +96,30 @@ fn expand_enum(input: DeriveInput) -> Result<TokenStream> {
                 #wasm_type::align()
             }
 
-            fn store<T>(&self, memory: &mut #private::MemoryMut<'_, T>, offset: usize) -> #private::anyhow::Result<()> {
+            fn lower<T>(
+                &self,
+                _store: &mut wasmtime::StoreContextMut<T>,
+                _func: &wasmtime::component::Func,
+                dst: &mut std::mem::MaybeUninit<Self::Lower>,
+            ) -> #private::anyhow::Result<()> {
+                dst.write(wasmtime::ValRaw::i32(match self { #lower } as i32));
+                Ok(())
+            }
+
+            fn store<T>(
+                &self,
+                memory: &mut #private::MemoryMut<'_, T>,
+                offset: usize,
+            ) -> #private::anyhow::Result<()> {
                 (match self { #lower } as #wasm_type).store(memory, offset)
             }
 
             #[inline]
-            fn lift(_store: &#private::StoreOpaque, _func: &wasmtime::component::Func, src: &Self::Lower) -> #private::anyhow::Result<Self> {
+            fn lift(
+                _store: &#private::StoreOpaque,
+                _func: &wasmtime::component::Func,
+                src: &Self::Lower,
+            ) -> #private::anyhow::Result<Self> {
                 match src.get_i32() as u32 {
                     #lift
                     _ => #private::anyhow::bail!("invalid {} value", stringify!(#name)),
