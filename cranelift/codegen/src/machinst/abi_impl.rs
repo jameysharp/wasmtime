@@ -110,6 +110,7 @@ use crate::settings;
 use crate::CodegenResult;
 use crate::{ir, isa};
 use crate::{machinst::*, trace};
+use alloc::borrow::Cow;
 use alloc::vec::Vec;
 use regalloc2::{PReg, PRegSet};
 use smallvec::{smallvec, SmallVec};
@@ -854,7 +855,7 @@ impl<M: ABIMachineSpec> ABICalleeImpl<M> {
         };
 
         Ok(Self {
-            ir_sig,
+            ir_sig: ir_sig.into_owned(),
             sig,
             dynamic_stackslots,
             dynamic_type_sizes,
@@ -1031,7 +1032,7 @@ fn gen_store_stack_multi<M: ABIMachineSpec>(
     ret
 }
 
-fn ensure_struct_return_ptr_is_returned(sig: &ir::Signature) -> ir::Signature {
+fn ensure_struct_return_ptr_is_returned(sig: &ir::Signature) -> Cow<ir::Signature> {
     let params_structret = sig
         .params
         .iter()
@@ -1041,9 +1042,11 @@ fn ensure_struct_return_ptr_is_returned(sig: &ir::Signature) -> ir::Signature {
             .returns
             .iter()
             .any(|arg| arg.purpose == ArgumentPurpose::StructReturn);
-    let mut sig = sig.clone();
-    if params_structret.is_some() && !rets_have_structret {
-        sig.returns.insert(0, params_structret.unwrap().clone());
+    let mut sig = Cow::Borrowed(sig);
+    if !rets_have_structret {
+        if let Some(params_structret) = params_structret {
+            sig.to_mut().returns.insert(0, params_structret.clone());
+        }
     }
     sig
 }
