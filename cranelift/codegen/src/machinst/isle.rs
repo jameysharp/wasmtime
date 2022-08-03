@@ -72,7 +72,7 @@ macro_rules! isle_prelude_methods {
 
         #[inline]
         fn value_regs(&mut self, r1: Reg, r2: Reg) -> ValueRegs {
-            ValueRegs::two(r1, r2)
+            ValueRegs::from_iter([r1, r2])
         }
 
         #[inline]

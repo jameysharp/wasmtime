@@ -6,6 +6,8 @@ use regalloc2::{PReg, VReg};
 use super::{RealReg, Reg, VirtualReg, Writable};
 use std::fmt::Debug;
 
+// We can extend this if/when we support 32-bit targets; e.g., an i128 on a
+// 32-bit machine will need up to four machine regs for a `Value`.
 const VALUE_REGS_PARTS: usize = 2;
 
 /// Location at which a `Value` is stored in register(s): the value is located
@@ -91,13 +93,7 @@ impl<R: Clone + Copy + Debug + PartialEq + Eq + InvalidSentinel> ValueRegs<R> {
 impl<R: Clone + Copy + Debug + PartialEq + Eq + InvalidSentinel> ValueRegs<R> {
     /// Create a Value-in-R location for a value stored in one register.
     pub fn one(reg: R) -> Self {
-        ValueRegs {
-            parts: [reg, R::invalid_sentinel()],
-        }
-    }
-    /// Create a Value-in-R location for a value stored in two registers.
-    pub fn two(r1: R, r2: R) -> Self {
-        ValueRegs { parts: [r1, r2] }
+        ValueRegs::from_iter([reg])
     }
 
     /// Return the number of registers used.
@@ -116,6 +112,17 @@ impl<R: Clone + Copy + Debug + PartialEq + Eq + InvalidSentinel> ValueRegs<R> {
         ValueRegs {
             parts: [f(self.parts[0]), f(self.parts[1])],
         }
+    }
+}
+
+impl<R: Debug + InvalidSentinel> FromIterator<R> for ValueRegs<R> {
+    fn from_iter<T: IntoIterator<Item = R>>(iter: T) -> Self {
+        let mut result = ValueRegs::invalid();
+        for (i, reg) in iter.into_iter().enumerate() {
+            // note: panics if more than VALUE_REGS_PARTS registers are given
+            result.parts[i] = reg;
+        }
+        result
     }
 }
 

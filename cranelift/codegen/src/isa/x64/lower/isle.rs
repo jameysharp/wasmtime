@@ -644,18 +644,12 @@ where
 {
     fn abi_arg_slot_regs(&mut self, arg: &ABIArg) -> Option<WritableValueRegs> {
         match arg {
-            &ABIArg::Slots { ref slots, .. } => match slots.len() {
-                1 => {
-                    let a = self.temp_writable_reg(slots[0].get_type());
-                    Some(WritableValueRegs::one(a))
-                }
-                2 => {
-                    let a = self.temp_writable_reg(slots[0].get_type());
-                    let b = self.temp_writable_reg(slots[1].get_type());
-                    Some(WritableValueRegs::two(a, b))
-                }
-                _ => panic!("Expected to see one or two slots only from {:?}", arg),
-            },
+            ABIArg::Slots { slots, .. } => Some(
+                slots
+                    .iter()
+                    .map(|slot| self.temp_writable_reg(slot.get_type()))
+                    .collect(),
+            ),
             _ => None,
         }
     }

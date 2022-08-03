@@ -456,21 +456,15 @@ fn alloc_vregs<I: VCodeInst>(
     next_vreg: &mut usize,
     vcode: &mut VCodeBuilder<I>,
 ) -> CodegenResult<ValueRegs<Reg>> {
-    let v = *next_vreg;
     let (regclasses, tys) = I::rc_for_type(ty)?;
-    *next_vreg += regclasses.len();
-    let regs: ValueRegs<Reg> = match regclasses {
-        &[rc0] => ValueRegs::one(VReg::new(v, rc0).into()),
-        &[rc0, rc1] => ValueRegs::two(VReg::new(v, rc0).into(), VReg::new(v + 1, rc1).into()),
-        // We can extend this if/when we support 32-bit targets; e.g.,
-        // an i128 on a 32-bit machine will need up to four machine regs
-        // for a `Value`.
-        _ => panic!("Value must reside in 1 or 2 registers"),
-    };
-    for (&reg_ty, &reg) in tys.iter().zip(regs.regs().iter()) {
-        vcode.set_vreg_type(reg.to_virtual_reg().unwrap(), reg_ty);
-    }
-    Ok(regs)
+    Ok(ValueRegs::from_iter(tys.iter().zip(regclasses).map(
+        |(&reg_ty, &rc)| {
+            let vreg = VReg::new(*next_vreg, rc);
+            *next_vreg += 1;
+            vcode.set_vreg_type(vreg.into(), reg_ty);
+            vreg.into()
+        },
+    )))
 }
 
 enum GenerateReturn {
