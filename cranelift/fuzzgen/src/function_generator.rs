@@ -466,7 +466,6 @@ where
     blocks_without_params: Vec<Block>,
     jump_tables: Vec<JumpTable>,
     func_refs: Vec<(Signature, FuncRef)>,
-    next_func_index: u32,
     static_stack_slots: Vec<(u32, StackSlot)>,
 }
 
@@ -484,7 +483,6 @@ where
             jump_tables: vec![],
             func_refs: vec![],
             static_stack_slots: vec![],
-            next_func_index: 0,
         }
     }
 
@@ -776,10 +774,9 @@ where
     }
 
     fn generate_funcrefs(&mut self, builder: &mut FunctionBuilder) -> Result<()> {
-        for _ in 0..self.param(&self.config.funcrefs_per_function)? {
+        let count = self.param(&self.config.funcrefs_per_function)?;
+        for func_index in 0..count.try_into().unwrap() {
             let (ext_name, sig) = if self.u.arbitrary::<bool>()? {
-                let func_index = self.next_func_index;
-                self.next_func_index = self.next_func_index.wrapping_add(1);
                 let user_func_ref = builder
                     .func
                     .declare_imported_user_function(UserExternalName {
