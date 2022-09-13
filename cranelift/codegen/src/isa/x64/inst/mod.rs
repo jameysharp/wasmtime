@@ -1455,7 +1455,7 @@ impl PrettyPrint for Inst {
 
             Inst::Args { args } => {
                 let mut s = "args".to_string();
-                for arg in args {
+                for arg in args.iter() {
                     use std::fmt::Write;
                     let preg = regs::show_reg(arg.preg);
                     let def = pretty_print_reg(arg.vreg.to_reg(), 8, allocs);
@@ -2050,7 +2050,7 @@ fn x64_get_operands<F: Fn(VReg) -> VReg>(inst: &Inst, collector: &mut OperandCol
         }
 
         Inst::Args { args } => {
-            for arg in args {
+            for arg in args.iter() {
                 collector.reg_fixed_def(arg.vreg, arg.preg);
             }
         }

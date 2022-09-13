@@ -45,7 +45,7 @@ type BoxCallIndInfo = Box<CallIndInfo>;
 type VecMachLabel = Vec<MachLabel>;
 type BoxJTSequenceInfo = Box<JTSequenceInfo>;
 type BoxExternalName = Box<ExternalName>;
-type VecArgPair = Vec<ArgPair>;
+type VecArgPair = Box<[ArgPair]>;
 
 /// The main entry point for lowering with ISLE.
 pub(crate) fn lower(

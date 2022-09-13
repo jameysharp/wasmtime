@@ -44,7 +44,7 @@ use target_lexicon::Triple;
 type BoxCallInfo = Box<CallInfo>;
 type BoxVecMachLabel = Box<SmallVec<[MachLabel; 4]>>;
 type MachLabelSlice = [MachLabel];
-type VecArgPair = Vec<ArgPair>;
+type VecArgPair = Box<[ArgPair]>;
 
 pub struct SinkableLoad {
     inst: Inst,

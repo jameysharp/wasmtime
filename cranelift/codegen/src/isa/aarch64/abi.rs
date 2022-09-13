@@ -392,7 +392,7 @@ impl ABIMachineSpec for AArch64MachineDeps {
     }
 
     fn gen_args(_isa_flags: &aarch64_settings::Flags, args: Vec<ArgPair>) -> Inst {
-        Inst::Args { args }
+        Inst::Args { args: args.into() }
     }
 
     fn gen_ret(setup_frame: bool, isa_flags: &aarch64_settings::Flags, rets: Vec<Reg>) -> Inst {
