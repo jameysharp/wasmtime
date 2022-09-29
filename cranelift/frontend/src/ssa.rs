@@ -7,7 +7,7 @@
 //!
 //! <https://link.springer.com/content/pdf/10.1007/978-3-642-37051-9_6.pdf>
 
-use crate::Variable;
+use crate::{HashMap, Variable};
 use alloc::vec::Vec;
 use core::convert::TryInto;
 use core::mem;
@@ -19,7 +19,6 @@ use cranelift_codegen::ir::types::{F32, F64};
 use cranelift_codegen::ir::{
     Block, Function, Inst, InstBuilder, InstructionData, JumpTableData, Type, Value,
 };
-use cranelift_codegen::packed_option::PackedOption;
 use smallvec::SmallVec;
 
 /// Structure containing the data relevant the construction of SSA for a given function.
@@ -36,10 +35,9 @@ use smallvec::SmallVec;
 /// and it is said _sealed_ if all of its predecessors have been declared. Only filled predecessors
 /// can be declared.
 pub struct SSABuilder {
-    // TODO: Consider a sparse representation rather than SecondaryMap-of-SecondaryMap.
     /// Records for every variable and for every relevant block, the last definition of
     /// the variable in the block.
-    variables: SecondaryMap<Variable, SecondaryMap<Block, PackedOption<Value>>>,
+    variables: HashMap<(Variable, Block), Value>,
 
     /// Records the position of the basic blocks and the list of values used but not defined in the
     /// block.
@@ -130,7 +128,7 @@ impl SSABuilder {
     /// Allocate a new blank SSA builder struct. Use the API function to interact with the struct.
     pub fn new() -> Self {
         Self {
-            variables: SecondaryMap::with_default(SecondaryMap::new()),
+            variables: HashMap::new(),
             ssa_blocks: SecondaryMap::new(),
             calls: Vec::new(),
             results: Vec::new(),
@@ -232,7 +230,7 @@ impl SSABuilder {
     /// The SSA value is passed as an argument because it should be created with
     /// `ir::DataFlowGraph::append_result`.
     pub fn def_var(&mut self, var: Variable, val: Value, block: Block) {
-        self.variables[var][block] = PackedOption::from(val);
+        self.variables.insert((var, block), val);
     }
 
     /// Declares a use of a variable in a given basic block. Returns the SSA value corresponding
@@ -251,10 +249,8 @@ impl SSABuilder {
     ) -> (Value, SideEffects) {
         // First, try Local Value Numbering (Algorithm 1 in the paper).
         // If the variable already has a known Value in this block, use that.
-        if let Some(var_defs) = self.variables.get(var) {
-            if let Some(val) = var_defs[block].expand() {
-                return (val, SideEffects::new());
-            }
+        if let Some(&val) = self.variables.get(&(var, block)) {
+            return (val, SideEffects::new());
         }
 
         // Otherwise, use Global Value Numbering (Algorithm 2 in the paper).
@@ -297,13 +293,12 @@ impl SSABuilder {
         // any of the blocks before `from`.
         //
         // So in either case there is no definition in these blocks yet and we can blindly set one.
-        let var_defs = &mut self.variables[var];
         while block != from {
+            let old_def = self.variables.insert((var, block), val);
+            debug_assert!(old_def.is_none());
             let data = &self.ssa_blocks[block];
             debug_assert!(data.sealed);
             debug_assert_eq!(data.predecessors.len(), 1);
-            debug_assert!(var_defs[block].is_none());
-            var_defs[block] = PackedOption::from(val);
             block = data.predecessors[0].block;
         }
     }
@@ -339,11 +334,10 @@ impl SSABuilder {
         mut block: Block,
     ) -> (Value, Block) {
         // Try to find an existing definition along single-predecessor edges first.
-        let var_defs = &mut self.variables[var];
         self.visited.clear();
         while self.ssa_blocks[block].has_one_predecessor() && self.visited.insert(block) {
             block = self.ssa_blocks[block].predecessors[0].block;
-            if let Some(val) = var_defs[block].expand() {
+            if let Some(&val) = self.variables.get(&(var, block)) {
                 self.results.push(val);
                 return (val, block);
             }
@@ -352,7 +346,7 @@ impl SSABuilder {
         // We've promised to return the most recent block where `var` was defined, but we didn't
         // find a usable definition. So create one.
         let val = func.dfg.append_block_param(block, ty);
-        var_defs[block] = PackedOption::from(val);
+        self.def_var(var, val, block);
 
         // Now every predecessor needs to pass its definition of this variable to the newly added
         // block parameter. To do that we have to "recursively" call `use_var`, but there are two
@@ -603,8 +597,7 @@ impl SSABuilder {
                 } in &mut preds
                 {
                     // We already did a full `use_var` above, so we can do just the fast path.
-                    let ssa_block_map = self.variables.get(var).unwrap();
-                    let pred_val = ssa_block_map.get(*pred_block).unwrap().unwrap();
+                    let pred_val = self.variables[&(var, *pred_block)];
                     let jump_arg = self.append_jump_argument(
                         func,
                         *last_inst,
@@ -729,11 +722,9 @@ impl SSABuilder {
             match call {
                 Call::UseVar(ssa_block) => {
                     // First we lookup for the current definition of the variable in this block
-                    if let Some(var_defs) = self.variables.get(var) {
-                        if let Some(val) = var_defs[ssa_block].expand() {
-                            self.results.push(val);
-                            continue;
-                        }
+                    if let Some(&val) = self.variables.get(&(var, ssa_block)) {
+                        self.results.push(val);
+                        continue;
                     }
                     self.use_var_nonlocal(func, var, ty, ssa_block);
                 }
