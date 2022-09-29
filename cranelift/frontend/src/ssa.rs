@@ -19,7 +19,6 @@ use cranelift_codegen::ir::types::{F32, F64};
 use cranelift_codegen::ir::{
     Block, Function, Inst, InstBuilder, InstructionData, JumpTableData, Type, Value,
 };
-use cranelift_codegen::packed_option::PackedOption;
 use smallvec::SmallVec;
 
 /// Structure containing the data relevant the construction of SSA for a given function.
@@ -36,11 +35,6 @@ use smallvec::SmallVec;
 /// and it is said _sealed_ if all of its predecessors have been declared. Only filled predecessors
 /// can be declared.
 pub struct SSABuilder {
-    // TODO: Consider a sparse representation rather than SecondaryMap-of-SecondaryMap.
-    /// Records for every variable and for every relevant block, the last definition of
-    /// the variable in the block.
-    variables: SecondaryMap<Variable, SecondaryMap<Block, PackedOption<Value>>>,
-
     /// Records the position of the basic blocks and the list of values used but not defined in the
     /// block.
     ssa_blocks: SecondaryMap<Block, SSABlockData>,
@@ -104,6 +98,8 @@ struct SSABlockData {
     sealed: bool,
     // List of current Block arguments for which an earlier def has not been found yet.
     undef_variables: Vec<(Variable, Value)>,
+    // List of variable definitions visible in the current block.
+    variables: SmallVec<[(Variable, Value); 2]>,
 }
 
 impl SSABlockData {
@@ -124,13 +120,18 @@ impl SSABlockData {
     fn has_one_predecessor(&self) -> bool {
         self.sealed && self.predecessors.len() == 1
     }
+
+    fn lookup_var(&self, var: Variable) -> Option<Value> {
+        self.variables
+            .iter()
+            .find_map(|&(other, val)| if other == var { Some(val) } else { None })
+    }
 }
 
 impl SSABuilder {
     /// Allocate a new blank SSA builder struct. Use the API function to interact with the struct.
     pub fn new() -> Self {
         Self {
-            variables: SecondaryMap::with_default(SecondaryMap::new()),
             ssa_blocks: SecondaryMap::new(),
             calls: Vec::new(),
             results: Vec::new(),
@@ -142,7 +143,6 @@ impl SSABuilder {
     /// Clears a `SSABuilder` from all its data, letting it in a pristine state without
     /// deallocating memory.
     pub fn clear(&mut self) {
-        self.variables.clear();
         self.ssa_blocks.clear();
         debug_assert!(self.calls.is_empty());
         debug_assert!(self.results.is_empty());
@@ -151,8 +151,7 @@ impl SSABuilder {
 
     /// Tests whether an `SSABuilder` is in a cleared state.
     pub fn is_empty(&self) -> bool {
-        self.variables.is_empty()
-            && self.ssa_blocks.is_empty()
+        self.ssa_blocks.is_empty()
             && self.calls.is_empty()
             && self.results.is_empty()
             && self.side_effects.is_empty()
@@ -232,7 +231,14 @@ impl SSABuilder {
     /// The SSA value is passed as an argument because it should be created with
     /// `ir::DataFlowGraph::append_result`.
     pub fn def_var(&mut self, var: Variable, val: Value, block: Block) {
-        self.variables[var][block] = PackedOption::from(val);
+        let variables = &mut self.ssa_blocks[block].variables;
+        for (other_var, other_val) in variables.iter_mut() {
+            if *other_var == var {
+                *other_val = val;
+                return;
+            }
+        }
+        variables.push((var, val));
     }
 
     /// Declares a use of a variable in a given basic block. Returns the SSA value corresponding
@@ -251,10 +257,8 @@ impl SSABuilder {
     ) -> (Value, SideEffects) {
         // First, try Local Value Numbering (Algorithm 1 in the paper).
         // If the variable already has a known Value in this block, use that.
-        if let Some(var_defs) = self.variables.get(var) {
-            if let Some(val) = var_defs[block].expand() {
-                return (val, SideEffects::new());
-            }
+        if let Some(val) = self.ssa_blocks[block].lookup_var(var) {
+            return (val, SideEffects::new());
         }
 
         // Otherwise, use Global Value Numbering (Algorithm 2 in the paper).
@@ -297,13 +301,11 @@ impl SSABuilder {
         // any of the blocks before `from`.
         //
         // So in either case there is no definition in these blocks yet and we can blindly set one.
-        let var_defs = &mut self.variables[var];
         while block != from {
+            self.def_var(var, val, block);
             let data = &self.ssa_blocks[block];
             debug_assert!(data.sealed);
             debug_assert_eq!(data.predecessors.len(), 1);
-            debug_assert!(var_defs[block].is_none());
-            var_defs[block] = PackedOption::from(val);
             block = data.predecessors[0].block;
         }
     }
@@ -339,11 +341,10 @@ impl SSABuilder {
         mut block: Block,
     ) -> (Value, Block) {
         // Try to find an existing definition along single-predecessor edges first.
-        let var_defs = &mut self.variables[var];
         self.visited.clear();
         while self.ssa_blocks[block].has_one_predecessor() && self.visited.insert(block) {
             block = self.ssa_blocks[block].predecessors[0].block;
-            if let Some(val) = var_defs[block].expand() {
+            if let Some(val) = self.ssa_blocks[block].lookup_var(var) {
                 self.results.push(val);
                 return (val, block);
             }
@@ -352,7 +353,7 @@ impl SSABuilder {
         // We've promised to return the most recent block where `var` was defined, but we didn't
         // find a usable definition. So create one.
         let val = func.dfg.append_block_param(block, ty);
-        var_defs[block] = PackedOption::from(val);
+        self.def_var(var, val, block);
 
         // Now every predecessor needs to pass its definition of this variable to the newly added
         // block parameter. To do that we have to "recursively" call `use_var`, but there are two
@@ -603,8 +604,7 @@ impl SSABuilder {
                 } in &mut preds
                 {
                     // We already did a full `use_var` above, so we can do just the fast path.
-                    let ssa_block_map = self.variables.get(var).unwrap();
-                    let pred_val = ssa_block_map.get(*pred_block).unwrap().unwrap();
+                    let pred_val = self.ssa_blocks[*pred_block].lookup_var(var).unwrap();
                     let jump_arg = self.append_jump_argument(
                         func,
                         *last_inst,
@@ -729,11 +729,9 @@ impl SSABuilder {
             match call {
                 Call::UseVar(ssa_block) => {
                     // First we lookup for the current definition of the variable in this block
-                    if let Some(var_defs) = self.variables.get(var) {
-                        if let Some(val) = var_defs[ssa_block].expand() {
-                            self.results.push(val);
-                            continue;
-                        }
+                    if let Some(val) = self.ssa_blocks[ssa_block].lookup_var(var) {
+                        self.results.push(val);
+                        continue;
                     }
                     self.use_var_nonlocal(func, var, ty, ssa_block);
                 }
