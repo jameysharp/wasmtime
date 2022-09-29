@@ -47,8 +47,6 @@ pub struct SSABuilder {
 
     /// Call stack for use in the `use_var`/`predecessors_lookup` state machine.
     calls: Vec<Call>,
-    /// Result stack for use in the `use_var`/`predecessors_lookup` state machine.
-    results: Vec<Value>,
 
     /// Side effects accumulated in the `use_var`/`predecessors_lookup` state machine.
     side_effects: SideEffects,
@@ -133,7 +131,6 @@ impl SSABuilder {
             variables: SecondaryMap::with_default(SecondaryMap::new()),
             ssa_blocks: SecondaryMap::new(),
             calls: Vec::new(),
-            results: Vec::new(),
             side_effects: SideEffects::new(),
             visited: EntitySet::new(),
         }
@@ -145,7 +142,6 @@ impl SSABuilder {
         self.variables.clear();
         self.ssa_blocks.clear();
         debug_assert!(self.calls.is_empty());
-        debug_assert!(self.results.is_empty());
         debug_assert!(self.side_effects.is_empty());
     }
 
@@ -154,7 +150,6 @@ impl SSABuilder {
         self.variables.is_empty()
             && self.ssa_blocks.is_empty()
             && self.calls.is_empty()
-            && self.results.is_empty()
             && self.side_effects.is_empty()
     }
 }
@@ -249,24 +244,14 @@ impl SSABuilder {
         ty: Type,
         block: Block,
     ) -> (Value, SideEffects) {
-        // First, try Local Value Numbering (Algorithm 1 in the paper).
-        // If the variable already has a known Value in this block, use that.
-        if let Some(var_defs) = self.variables.get(var) {
-            if let Some(val) = var_defs[block].expand() {
-                return (val, SideEffects::new());
-            }
-        }
-
-        // Otherwise, use Global Value Numbering (Algorithm 2 in the paper).
-        // This resolves the Value with respect to its predecessors.
         debug_assert!(self.calls.is_empty());
-        debug_assert!(self.results.is_empty());
         debug_assert!(self.side_effects.is_empty());
 
-        // Prepare the 'calls' and 'results' stacks for the state machine.
+        // Prepare the 'calls' stack for the state machine.
         self.use_var_nonlocal(func, var, ty, block);
 
-        let value = self.run_state_machine(func, var, ty);
+        self.run_state_machine(func, var, ty);
+        let value = self.variables[var][block].unwrap();
         let side_effects = mem::replace(&mut self.side_effects, SideEffects::new());
 
         (value, side_effects)
@@ -276,6 +261,14 @@ impl SSABuilder {
     ///
     /// This function sets up state for `run_state_machine()` but does not execute it.
     fn use_var_nonlocal(&mut self, func: &mut Function, var: Variable, ty: Type, mut block: Block) {
+        // First, try Local Value Numbering (Algorithm 1 in the paper).
+        // If the variable already has a known Value in this block, use that.
+        if self.variables[var][block].is_some() {
+            return;
+        }
+
+        // Otherwise, use Global Value Numbering (Algorithm 2 in the paper).
+        // This resolves the Value with respect to its predecessors.
         // Find the most recent definition of `var`, and the block the definition comes from.
         let (val, from) = self.find_var(func, var, ty, block);
 
@@ -311,8 +304,7 @@ impl SSABuilder {
     /// Find the most recent definition of this variable, returning both the definition and the
     /// block in which it was found. If we can't find a definition that's provably the right one for
     /// all paths to the current block, then append a block parameter to some block and use that as
-    /// the definition. Either way, also arrange that the definition will be on the `results` stack
-    /// when `run_state_machine` is done processing the current step.
+    /// the definition.
     ///
     /// If a block has exactly one predecessor, and the block is sealed so we know its predecessors
     /// will never change, then its definition for this variable is the same as the definition from
@@ -344,7 +336,6 @@ impl SSABuilder {
         while self.ssa_blocks[block].has_one_predecessor() && self.visited.insert(block) {
             block = self.ssa_blocks[block].predecessors[0].block;
             if let Some(val) = var_defs[block].expand() {
-                self.results.push(val);
                 return (val, block);
             }
         }
@@ -360,12 +351,9 @@ impl SSABuilder {
         // can't actually recurse; instead we defer to `run_state_machine`. Second, if we don't
         // know all our predecessors yet, we have to defer this work until the block gets sealed.
         if self.ssa_blocks[block].sealed {
-            // Once all the `calls` added here complete, this leaves either `val` or an equivalent
-            // definition on the `results` stack.
             self.begin_predecessors_lookup(val, block);
         } else {
             self.ssa_blocks[block].undef_variables.push((var, val));
-            self.results.push(val);
         }
         (val, block)
     }
@@ -475,8 +463,6 @@ impl SSABuilder {
     ///
     /// Doing this lookup for each Value in each Block preserves SSA form during construction.
     ///
-    /// Returns the chosen Value.
-    ///
     /// ## Arguments
     ///
     /// `sentinel` is a dummy Block parameter inserted by `use_var_nonlocal()`.
@@ -491,13 +477,12 @@ impl SSABuilder {
         var: Variable,
         ty: Type,
         block: Block,
-    ) -> Value {
+    ) {
         debug_assert!(self.calls.is_empty());
-        debug_assert!(self.results.is_empty());
         // self.side_effects may be non-empty here so that callers can
         // accumulate side effects over multiple calls.
         self.begin_predecessors_lookup(sentinel, block);
-        self.run_state_machine(func, var, ty)
+        self.run_state_machine(func, var, ty);
     }
 
     /// Set up state for `run_state_machine()` to initiate non-local use lookups
@@ -506,15 +491,12 @@ impl SSABuilder {
     fn begin_predecessors_lookup(&mut self, sentinel: Value, dest_block: Block) {
         self.calls
             .push(Call::FinishPredecessorsLookup(sentinel, dest_block));
-        // Iterate over the predecessors.
-        let mut calls = mem::replace(&mut self.calls, Vec::new());
-        calls.extend(
-            self.predecessors(dest_block)
+        self.calls.extend(
+            self.ssa_blocks[dest_block]
+                .predecessors
                 .iter()
-                .rev()
-                .map(|&PredBlock { block: pred, .. }| Call::UseVar(pred)),
+                .map(|pred| Call::UseVar(pred.block)),
         );
-        self.calls = calls;
     }
 
     /// Examine the values from the predecessors and compute a result value, creating
@@ -534,14 +516,10 @@ impl SSABuilder {
         // ensure that we can tell when the same definition has reached this block via multiple
         // paths. Doing so also detects cyclic references to the sentinel, which can occur in
         // unreachable code.
-        let num_predecessors = self.predecessors(dest_block).len();
-        for pred_val in self
-            .results
-            .iter()
-            .rev()
-            .take(num_predecessors)
-            .map(|&val| func.dfg.resolve_aliases(val))
-        {
+        let var_defs = &self.variables[var];
+        for pred in self.predecessors(dest_block) {
+            let pred_val = var_defs[pred.block].unwrap();
+            let pred_val = func.dfg.resolve_aliases(pred_val);
             match pred_values {
                 ZeroOneOrMore::Zero => {
                     if pred_val != sentinel {
@@ -560,10 +538,7 @@ impl SSABuilder {
             }
         }
 
-        // Those predecessors' Values have been examined: pop all their results.
-        self.results.truncate(self.results.len() - num_predecessors);
-
-        let result_val = match pred_values {
+        match pred_values {
             ZeroOneOrMore::Zero => {
                 // The variable is used but never defined before. This is an irregularity in the
                 // code, but rather than throwing an error we silently initialize the variable to
@@ -580,7 +555,6 @@ impl SSABuilder {
                 );
                 func.dfg.remove_block_param(sentinel);
                 func.dfg.change_to_alias(sentinel, zero);
-                zero
             }
             ZeroOneOrMore::One(pred_val) => {
                 // Here all the predecessors use a single value to represent our variable
@@ -589,7 +563,6 @@ impl SSABuilder {
                 // we can't afford a re-writing pass right now we just declare an alias.
                 func.dfg.remove_block_param(sentinel);
                 func.dfg.change_to_alias(sentinel, pred_val);
-                pred_val
             }
             ZeroOneOrMore::More => {
                 // There is disagreement in the predecessors on which value to use so we have
@@ -622,12 +595,8 @@ impl SSABuilder {
                 // Now that we're done, move the predecessors list back.
                 debug_assert!(self.predecessors(dest_block).is_empty());
                 *self.predecessors_mut(dest_block) = preds;
-
-                sentinel
             }
-        };
-
-        self.results.push(result_val);
+        }
     }
 
     /// Appends a jump argument to a jump instruction, returns block created in case of
@@ -723,18 +692,12 @@ impl SSABuilder {
     /// `use_var` in each predecessor. To avoid risking running out of callstack
     /// space, we keep an explicit stack and use a small state machine rather
     /// than literal recursion.
-    fn run_state_machine(&mut self, func: &mut Function, var: Variable, ty: Type) -> Value {
+    fn run_state_machine(&mut self, func: &mut Function, var: Variable, ty: Type) {
         // Process the calls scheduled in `self.calls` until it is empty.
         while let Some(call) = self.calls.pop() {
             match call {
                 Call::UseVar(ssa_block) => {
                     // First we lookup for the current definition of the variable in this block
-                    if let Some(var_defs) = self.variables.get(var) {
-                        if let Some(val) = var_defs[ssa_block].expand() {
-                            self.results.push(val);
-                            continue;
-                        }
-                    }
                     self.use_var_nonlocal(func, var, ty, ssa_block);
                 }
                 Call::FinishPredecessorsLookup(sentinel, dest_block) => {
@@ -742,8 +705,6 @@ impl SSABuilder {
                 }
             }
         }
-        debug_assert_eq!(self.results.len(), 1);
-        self.results.pop().unwrap()
     }
 }
 
