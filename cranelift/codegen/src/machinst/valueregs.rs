@@ -56,6 +56,12 @@ impl InvalidSentinel for Writable<Reg> {
     }
 }
 
+impl<R: Clone + Copy + Debug + PartialEq + Eq + InvalidSentinel> Default for ValueRegs<R> {
+    fn default() -> Self {
+        ValueRegs::invalid()
+    }
+}
+
 impl<R: Clone + Copy + Debug + PartialEq + Eq + InvalidSentinel> ValueRegs<R> {
     /// Create an invalid Value-in-Reg.
     pub fn invalid() -> Self {
@@ -86,9 +92,7 @@ impl<R: Clone + Copy + Debug + PartialEq + Eq + InvalidSentinel> ValueRegs<R> {
     pub fn regs(&self) -> &[R] {
         &self.parts[0..self.len()]
     }
-}
 
-impl<R: Clone + Copy + Debug + PartialEq + Eq + InvalidSentinel> ValueRegs<R> {
     /// Create a Value-in-R location for a value stored in one register.
     pub fn one(reg: R) -> Self {
         ValueRegs {

@@ -226,12 +226,12 @@ impl BlockLoweringOrder {
         assert!(!f.layout.is_cold(entry));
 
         // Step 1: compute the in-edge and out-edge count of every block.
-        let mut block_in_count = SecondaryMap::with_default(0);
-        let mut block_out_count = SecondaryMap::with_default(0);
+        let mut block_in_count = SecondaryMap::<Block, usize>::new();
+        let mut block_out_count = SecondaryMap::<Block, usize>::new();
 
         // Cache the block successors to avoid re-examining branches below.
         let mut block_succs: SmallVec<[(Inst, usize, Block); 128]> = SmallVec::new();
-        let mut block_succ_range = SecondaryMap::with_default((0, 0));
+        let mut block_succ_range = SecondaryMap::new();
         let mut indirect_branch_target_clif_blocks = FxHashSet::default();
 
         for block in f.layout.blocks() {
@@ -476,7 +476,7 @@ impl BlockLoweringOrder {
             .map(|&(inst, succ)| (inst, lb_to_bindex.get(&succ).cloned().unwrap()))
             .collect();
 
-        let mut orig_map = SecondaryMap::with_default(None);
+        let mut orig_map = SecondaryMap::new();
         for (i, lb) in lowered_order.iter().enumerate() {
             let i = BlockIndex::new(i);
             if let Some(b) = lb.orig_block() {

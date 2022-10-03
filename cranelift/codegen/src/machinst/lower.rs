@@ -39,7 +39,7 @@ use super::{first_user_vreg_index, VCodeBuildDirection};
 /// part of one atomic contiguous section of the dynamic execution trace, and
 /// they can be freely permuted (modulo true dataflow dependencies) without
 /// affecting program behavior.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 struct InstColor(u32);
 impl InstColor {
     fn new(n: u32) -> InstColor {
@@ -282,9 +282,10 @@ pub struct Lower<'func, I: VCodeInst> {
 /// `Unused` answers are correct, `Multiple` answers are correct, but
 /// some `Once`s may change to `Multiple`s. Then we propagate
 /// `Multiple` transitively using a workqueue/fixpoint algorithm.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum ValueUseState {
     /// Not used at all.
+    #[default]
     Unused,
     /// Used exactly once.
     Once,
@@ -362,7 +363,7 @@ impl<'func, I: VCodeInst> Lower<'func, I> {
 
         let mut next_vreg: usize = first_user_vreg_index();
 
-        let mut value_regs = SecondaryMap::with_default(ValueRegs::invalid());
+        let mut value_regs = SecondaryMap::<Value, ValueRegs<_>>::new();
 
         // Assign a vreg to each block param and each inst result.
         for bb in f.layout.blocks() {
@@ -404,7 +405,7 @@ impl<'func, I: VCodeInst> Lower<'func, I> {
         // Compute instruction colors, find constant instructions, and find instructions with
         // side-effects, in one combined pass.
         let mut cur_color = 0;
-        let mut block_end_colors = SecondaryMap::with_default(InstColor::new(0));
+        let mut block_end_colors = SecondaryMap::new();
         let mut side_effect_inst_entry_colors = FxHashMap::default();
         let mut inst_constants = FxHashMap::default();
         for bb in f.layout.blocks() {
@@ -479,8 +480,7 @@ impl<'func, I: VCodeInst> Lower<'func, I> {
         // Once, Multiple} is part of what makes this pass more
         // efficient than a full indirect-use-counting pass.
 
-        let mut value_ir_uses: SecondaryMap<Value, ValueUseState> =
-            SecondaryMap::with_default(ValueUseState::Unused);
+        let mut value_ir_uses = SecondaryMap::new();
 
         // Stack of iterators over Values as we do DFS to mark
         // Multiple-state subtrees.

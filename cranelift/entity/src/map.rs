@@ -207,7 +207,7 @@ where
 impl<K, V> Serialize for SecondaryMap<K, V>
 where
     K: EntityRef,
-    V: Clone + PartialEq + Serialize,
+    V: Clone + Default + PartialEq + Serialize,
 {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -215,15 +215,11 @@ where
     {
         // TODO: bincode encodes option as "byte for Some/None" and then optionally the content
         // TODO: we can actually optimize it by encoding manually bitmask, then elements
-        let mut elems_cnt = self.elems.len();
-        while elems_cnt > 0 && self.elems[elems_cnt - 1] == self.default {
-            elems_cnt -= 1;
-        }
-        let mut seq = serializer.serialize_seq(Some(1 + elems_cnt))?;
-        seq.serialize_element(&Some(self.default.clone()))?;
+        let default = V::default();
+        let elems_cnt = self.elems.iter().rposition(|e| e != &default).map_or(0, |i| i + 1);
+        let mut seq = serializer.serialize_seq(Some(elems_cnt))?;
         for e in self.elems.iter().take(elems_cnt) {
-            let some_e = Some(e);
-            seq.serialize_element(if *e == self.default { &None } else { &some_e })?;
+            seq.serialize_element(&Some(e).filter(|&e| e != &default))?;
         }
         seq.end()
     }
@@ -233,7 +229,7 @@ where
 impl<'de, K, V> Deserialize<'de> for SecondaryMap<K, V>
 where
     K: EntityRef,
-    V: Clone + Deserialize<'de>,
+    V: Clone + Default + Deserialize<'de>,
 {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -247,7 +243,7 @@ where
         impl<'de, K, V> Visitor<'de> for SecondaryMapVisitor<K, V>
         where
             K: EntityRef,
-            V: Clone + Deserialize<'de>,
+            V: Clone + Default + Deserialize<'de>,
         {
             type Value = SecondaryMap<K, V>;
 
@@ -259,20 +255,15 @@ where
             where
                 A: SeqAccess<'de>,
             {
-                match seq.next_element()? {
-                    Some(Some(default_val)) => {
-                        let default_val: V = default_val; // compiler can't infer the type
-                        let mut m = SecondaryMap::with_default(default_val.clone());
-                        let mut idx = 0;
-                        while let Some(val) = seq.next_element()? {
-                            let val: Option<_> = val; // compiler can't infer the type
-                            m[K::new(idx)] = val.unwrap_or_else(|| default_val.clone());
-                            idx += 1;
-                        }
-                        Ok(m)
+                let mut m = SecondaryMap::with_capacity(seq.size_hint().unwrap_or(0));
+                let mut idx = 0;
+                while let Some(val) = seq.next_element()? {
+                    if let Some(val) = val {
+                        m[K::new(idx)] = val;
                     }
-                    _ => Err(serde::de::Error::custom("Default value required")),
+                    idx += 1;
                 }
+                Ok(m)
             }
         }
 
