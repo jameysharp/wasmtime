@@ -66,17 +66,6 @@ where
         }
     }
 
-    /// Create a new empty map with a specified default value.
-    ///
-    /// This constructor does not require V to implement Default.
-    pub fn with_default(default: V) -> Self {
-        Self {
-            elems: Vec::new(),
-            default,
-            unused: PhantomData,
-        }
-    }
-
     /// Returns the number of elements the map can hold without reallocating.
     pub fn capacity(&self) -> usize {
         self.elems.capacity()
