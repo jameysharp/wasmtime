@@ -24,27 +24,18 @@ use serde::{
 /// The map does not track if an entry for a key has been inserted or not. Instead it behaves as if
 /// all keys have a default entry from the beginning.
 #[derive(Debug, Clone, Hash)]
-pub struct SecondaryMap<K, V>
-where
-    K: EntityRef,
-    V: Clone,
-{
+pub struct SecondaryMap<K, V> {
     elems: Vec<V>,
+    // Requesting an immutable borrow of an element which hasn't been initialized returns a pointer
+    // to this field instead. It is not used otherwise.
     default: V,
     unused: PhantomData<K>,
 }
 
 /// Shared `SecondaryMap` implementation for all value types.
-impl<K, V> SecondaryMap<K, V>
-where
-    K: EntityRef,
-    V: Clone,
-{
+impl<K, V: Default> SecondaryMap<K, V> {
     /// Create a new empty map.
-    pub fn new() -> Self
-    where
-        V: Default,
-    {
+    pub fn new() -> Self {
         Self {
             elems: Vec::new(),
             default: Default::default(),
@@ -55,26 +46,25 @@ where
     /// Create a new, empty map with the specified capacity.
     ///
     /// The map will be able to hold exactly `capacity` elements without reallocating.
-    pub fn with_capacity(capacity: usize) -> Self
-    where
-        V: Default,
-    {
+    pub fn with_capacity(capacity: usize) -> Self {
         Self {
             elems: Vec::with_capacity(capacity),
             default: Default::default(),
             unused: PhantomData,
         }
     }
+}
 
+impl<K, V: Default> Default for SecondaryMap<K, V> {
+    fn default() -> SecondaryMap<K, V> {
+        SecondaryMap::new()
+    }
+}
+
+impl<K, V> SecondaryMap<K, V> {
     /// Returns the number of elements the map can hold without reallocating.
     pub fn capacity(&self) -> usize {
         self.elems.capacity()
-    }
-
-    /// Get the element at `k` if it exists.
-    #[inline(always)]
-    pub fn get(&self, k: K) -> Option<&V> {
-        self.elems.get(k.index())
     }
 
     /// Is this map completely empty?
@@ -87,6 +77,24 @@ where
     #[inline(always)]
     pub fn clear(&mut self) {
         self.elems.clear()
+    }
+
+    /// Iterate over all the values in this map.
+    pub fn values(&self) -> slice::Iter<V> {
+        self.elems.iter()
+    }
+
+    /// Iterate over all the values in this map, mutable edition.
+    pub fn values_mut(&mut self) -> slice::IterMut<V> {
+        self.elems.iter_mut()
+    }
+}
+
+impl<K: EntityRef, V> SecondaryMap<K, V> {
+    /// Get the element at `k` if it exists.
+    #[inline(always)]
+    pub fn get(&self, k: K) -> Option<&V> {
+        self.elems.get(k.index())
     }
 
     /// Iterate over all the keys and values in this map.
@@ -103,48 +111,26 @@ where
     pub fn keys(&self) -> Keys<K> {
         Keys::with_len(self.elems.len())
     }
+}
 
-    /// Iterate over all the values in this map.
-    pub fn values(&self) -> slice::Iter<V> {
-        self.elems.iter()
-    }
-
-    /// Iterate over all the values in this map, mutable edition.
-    pub fn values_mut(&mut self) -> slice::IterMut<V> {
-        self.elems.iter_mut()
-    }
-
+impl<K, V: Default> SecondaryMap<K, V> {
     /// Resize the map to have `n` entries by adding default entries as needed.
-    pub fn resize(&mut self, n: usize) {
-        self.elems.resize(n, self.default.clone());
+    pub fn resize(&mut self, n: usize) where V: Default {
+        self.elems.resize_with(n + 1, Default::default);
     }
 
     /// Slow path for `index_mut` which resizes the vector.
     #[cold]
     fn resize_for_index_mut(&mut self, i: usize) -> &mut V {
-        self.elems.resize(i + 1, self.default.clone());
+        self.resize(i);
         &mut self.elems[i]
-    }
-}
-
-impl<K, V> Default for SecondaryMap<K, V>
-where
-    K: EntityRef,
-    V: Clone + Default,
-{
-    fn default() -> SecondaryMap<K, V> {
-        SecondaryMap::new()
     }
 }
 
 /// Immutable indexing into an `SecondaryMap`.
 ///
 /// All keys are permitted. Untouched entries have the default value.
-impl<K, V> Index<K> for SecondaryMap<K, V>
-where
-    K: EntityRef,
-    V: Clone,
-{
+impl<K: EntityRef, V> Index<K> for SecondaryMap<K, V> {
     type Output = V;
 
     #[inline(always)]
@@ -156,11 +142,7 @@ where
 /// Mutable indexing into an `SecondaryMap`.
 ///
 /// The map grows as needed to accommodate new keys.
-impl<K, V> IndexMut<K> for SecondaryMap<K, V>
-where
-    K: EntityRef,
-    V: Clone,
-{
+impl<K: EntityRef, V: Default> IndexMut<K> for SecondaryMap<K, V> {
     #[inline(always)]
     fn index_mut(&mut self, k: K) -> &mut V {
         let i = k.index();
@@ -171,33 +153,19 @@ where
     }
 }
 
-impl<K, V> PartialEq for SecondaryMap<K, V>
-where
-    K: EntityRef,
-    V: Clone + PartialEq,
-{
+impl<K, V: Default + PartialEq> PartialEq for SecondaryMap<K, V> {
     fn eq(&self, other: &Self) -> bool {
         let min_size = min(self.elems.len(), other.elems.len());
-        self.default == other.default
-            && self.elems[..min_size] == other.elems[..min_size]
-            && self.elems[min_size..].iter().all(|e| *e == self.default)
-            && other.elems[min_size..].iter().all(|e| *e == other.default)
+        self.elems[..min_size] == other.elems[..min_size]
+            && self.elems[min_size..].iter().all(|e| *e == V::default())
+            && other.elems[min_size..].iter().all(|e| *e == V::default())
     }
 }
 
-impl<K, V> Eq for SecondaryMap<K, V>
-where
-    K: EntityRef,
-    V: Clone + PartialEq + Eq,
-{
-}
+impl<K, V: Default + Eq> Eq for SecondaryMap<K, V> {}
 
 #[cfg(feature = "enable-serde")]
-impl<K, V> Serialize for SecondaryMap<K, V>
-where
-    K: EntityRef,
-    V: Clone + Default + PartialEq + Serialize,
-{
+impl<K, V: Default + PartialEq + Serialize> Serialize for SecondaryMap<K, V> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -215,11 +183,7 @@ where
 }
 
 #[cfg(feature = "enable-serde")]
-impl<'de, K, V> Deserialize<'de> for SecondaryMap<K, V>
-where
-    K: EntityRef,
-    V: Clone + Default + Deserialize<'de>,
-{
+impl<'de, K: EntityRef, V: Default + Deserialize<'de>> Deserialize<'de> for SecondaryMap<K, V> {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
@@ -229,11 +193,7 @@ where
             unused: PhantomData<fn(K) -> V>,
         }
 
-        impl<'de, K, V> Visitor<'de> for SecondaryMapVisitor<K, V>
-        where
-            K: EntityRef,
-            V: Clone + Default + Deserialize<'de>,
-        {
+        impl<'de, K: EntityRef, V: Default + Deserialize<'de>> Visitor<'de> for SecondaryMapVisitor<K, V> {
             type Value = SecondaryMap<K, V>;
 
             fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
