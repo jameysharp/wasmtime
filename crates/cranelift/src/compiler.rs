@@ -269,11 +269,8 @@ impl wasmtime_environ::Compiler for Compiler {
         let mut validator = validator.into_validator(validator_allocations);
         func_translator.translate_body(&mut validator, body, &mut context.func, &mut func_env)?;
 
-        let (_, code_buf) = compile_maybe_cached(&mut context, isa, cache_ctx.as_mut())?;
-        // compile_maybe_cached returns the compiled_code but that borrow has the same lifetime as
-        // the mutable borrow of `context`, so the borrow checker prohibits other borrows from
-        // `context` while it's alive. Borrow it again to make the borrow checker happy.
-        let compiled_code = context.compiled_code().unwrap();
+        let (compiled_code, code_buf) =
+            compile_maybe_cached(&mut context, isa, cache_ctx.as_mut())?;
         let alignment = compiled_code.alignment;
 
         let func_relocs = compiled_code
@@ -303,7 +300,7 @@ impl wasmtime_environ::Compiler for Compiler {
         let length = u32::try_from(code_buf.len()).unwrap();
 
         let address_transform =
-            Self::get_function_address_map(compiled_code, &body, length, tunables);
+            Self::get_function_address_map(&compiled_code, &body, length, tunables);
 
         let ranges = if tunables.generate_native_debuginfo {
             Some(compiled_code.value_labels_ranges.clone())
@@ -486,11 +483,11 @@ mod incremental_cache {
         }
     }
 
-    pub(super) fn compile_maybe_cached<'a>(
-        context: &'a mut Context,
+    pub(super) fn compile_maybe_cached(
+        context: &mut Context,
         isa: &dyn TargetIsa,
         cache_ctx: Option<&mut IncrementalCacheContext>,
-    ) -> Result<(&'a CompiledCode, Vec<u8>), CompileError> {
+    ) -> Result<(CompiledCode, Vec<u8>), CompileError> {
         let cache_ctx = match cache_ctx {
             Some(ctx) => ctx,
             None => return compile_uncached(context, isa),
@@ -507,7 +504,8 @@ mod incremental_cache {
             cache_ctx.num_cached += 1;
         }
 
-        Ok((compiled_code, compiled_code.code_buffer().to_vec()))
+        let code_buf = compiled_code.code_buffer().to_vec();
+        Ok((compiled_code, code_buf))
     }
 }
 
@@ -515,18 +513,18 @@ mod incremental_cache {
 use incremental_cache::*;
 
 #[cfg(not(feature = "incremental-cache"))]
-fn compile_maybe_cached<'a>(
-    context: &'a mut Context,
+fn compile_maybe_cached(
+    context: &mut Context,
     isa: &dyn TargetIsa,
     _cache_ctx: Option<&mut IncrementalCacheContext>,
-) -> Result<(&'a CompiledCode, Vec<u8>), CompileError> {
+) -> Result<(CompiledCode, Vec<u8>), CompileError> {
     compile_uncached(context, isa)
 }
 
-fn compile_uncached<'a>(
-    context: &'a mut Context,
+fn compile_uncached(
+    context: &mut Context,
     isa: &dyn TargetIsa,
-) -> Result<(&'a CompiledCode, Vec<u8>), CompileError> {
+) -> Result<(CompiledCode, Vec<u8>), CompileError> {
     let mut code_buf = Vec::new();
     let compiled_code = context
         .compile_and_emit(isa, &mut code_buf)

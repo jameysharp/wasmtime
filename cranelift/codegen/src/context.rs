@@ -49,9 +49,6 @@ pub struct Context {
     /// Loop analysis of `func`.
     pub loop_analysis: LoopAnalysis,
 
-    /// Result of MachBackend compilation, if computed.
-    pub(crate) compiled_code: Option<CompiledCode>,
-
     /// Flag: do we want a disassembly with the CompiledCode?
     pub want_disasm: bool,
 }
@@ -75,7 +72,6 @@ impl Context {
             cfg: ControlFlowGraph::new(),
             domtree: DominatorTree::new(),
             loop_analysis: LoopAnalysis::new(),
-            compiled_code: None,
             want_disasm: false,
         }
     }
@@ -86,14 +82,7 @@ impl Context {
         self.cfg.clear();
         self.domtree.clear();
         self.loop_analysis.clear();
-        self.compiled_code = None;
         self.want_disasm = false;
-    }
-
-    /// Returns the compilation result for this function, available after any `compile` function
-    /// has been called.
-    pub fn compiled_code(&self) -> Option<&CompiledCode> {
-        self.compiled_code.as_ref()
     }
 
     /// Set the flag to request a disassembly when compiling with a
@@ -107,7 +96,7 @@ impl Context {
     /// Run the function through all the passes necessary to generate code for the target ISA
     /// represented by `isa`, as well as the final step of emitting machine code into a
     /// `Vec<u8>`. The machine code is not relocated. Instead, any relocations can be obtained
-    /// from `compiled_code()`.
+    /// from `CompiledCode`.
     ///
     /// This function calls `compile`, taking care to resize `mem` as
     /// needed, so it provides a safe interface.
@@ -117,7 +106,7 @@ impl Context {
         &mut self,
         isa: &dyn TargetIsa,
         mem: &mut Vec<u8>,
-    ) -> CompileResult<&CompiledCode> {
+    ) -> CompileResult<CompiledCode> {
         let compiled_code = self.compile(isa)?;
         mem.extend_from_slice(compiled_code.code_buffer());
         Ok(compiled_code)
@@ -177,35 +166,13 @@ impl Context {
     /// code sink.
     ///
     /// Returns information about the function's code and read-only data.
-    pub fn compile(&mut self, isa: &dyn TargetIsa) -> CompileResult<&CompiledCode> {
+    pub fn compile(&mut self, isa: &dyn TargetIsa) -> CompileResult<CompiledCode> {
         let _tt = timing::compile();
         let stencil = self.compile_stencil(isa).map_err(|error| CompileError {
             inner: error,
             func: &self.func,
         })?;
-        Ok(self
-            .compiled_code
-            .insert(stencil.apply_params(&self.func.params)))
-    }
-
-    /// If available, return information about the code layout in the
-    /// final machine code: the offsets (in bytes) of each basic-block
-    /// start, and all basic-block edges.
-    #[deprecated = "use CompiledCode::get_code_bb_layout"]
-    pub fn get_code_bb_layout(&self) -> Option<(Vec<usize>, Vec<(usize, usize)>)> {
-        self.compiled_code().map(CompiledCode::get_code_bb_layout)
-    }
-
-    /// Creates unwind information for the function.
-    ///
-    /// Returns `None` if the function has no unwind information.
-    #[cfg(feature = "unwind")]
-    #[deprecated = "use CompiledCode::create_unwind_info"]
-    pub fn create_unwind_info(
-        &self,
-        isa: &dyn TargetIsa,
-    ) -> CodegenResult<Option<crate::isa::unwind::UnwindInfo>> {
-        self.compiled_code().unwrap().create_unwind_info(isa)
+        Ok(stencil.apply_params(&self.func.params))
     }
 
     /// Run the verifier on the function.

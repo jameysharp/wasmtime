@@ -40,7 +40,7 @@ impl Context {
         &mut self,
         isa: &dyn TargetIsa,
         cache_store: &mut dyn CacheKvStore,
-    ) -> CompileResult<(&CompiledCode, bool)> {
+    ) -> CompileResult<(CompiledCode, bool)> {
         let cache_key_hash = {
             let _tt = timing::try_incremental_cache();
 
@@ -49,17 +49,11 @@ impl Context {
             if let Some(blob) = cache_store.get(&cache_key_hash.0) {
                 match try_finish_recompile(&self.func, &blob) {
                     Ok(compiled_code) => {
-                        let info = compiled_code.code_info();
-
                         if isa.flags().enable_incremental_compilation_cache_checks() {
                             let actual_result = self.compile(isa)?;
-                            assert_eq!(*actual_result, compiled_code);
-                            assert_eq!(actual_result.code_info(), info);
-                            // no need to set `compiled_code` here, it's set by `compile()`.
-                            return Ok((actual_result, true));
+                            assert_eq!(actual_result, compiled_code);
+                            assert_eq!(actual_result.code_info(), compiled_code.code_info());
                         }
-
-                        let compiled_code = self.compiled_code.insert(compiled_code);
                         return Ok((compiled_code, true));
                     }
                     Err(err) => {
@@ -85,10 +79,7 @@ impl Context {
             stencil
         };
 
-        let compiled_code = self
-            .compiled_code
-            .insert(stencil.apply_params(&self.func.params));
-
+        let compiled_code = stencil.apply_params(&self.func.params);
         Ok((compiled_code, false))
     }
 }

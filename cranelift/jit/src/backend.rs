@@ -690,10 +690,8 @@ impl Module for JITModule {
             return Err(ModuleError::DuplicateDefinition(decl.name.to_owned()));
         }
 
-        // work around borrow-checker to allow reuse of ctx below
-        let res = ctx.compile(self.isa())?;
-        let alignment = res.alignment as u64;
-        let compiled_code = ctx.compiled_code().unwrap();
+        let compiled_code = ctx.compile(self.isa())?;
+        let alignment = compiled_code.alignment as u64;
 
         let code_size = compiled_code.code_info().total_size;
 

@@ -140,7 +140,7 @@ fuzz_target!(|func: SingleFunction| {
     if expect_cache_hit {
         let after_mutation_result_from_cache = icache::try_finish_recompile(&func, &serialized)
             .expect("recompilation should always work for identity");
-        assert_eq!(*after_mutation_result, after_mutation_result_from_cache);
+        assert_eq!(after_mutation_result, after_mutation_result_from_cache);
 
         let new_info = after_mutation_result_from_cache.code_info();
         assert_eq!(

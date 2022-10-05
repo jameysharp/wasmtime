@@ -250,11 +250,11 @@ fn handle_module(options: &Options, path: &Path, name: &str, fisa: FlagsOrIsa) -
         let mut saved_size = None;
         let func_index = num_func_imports + def_index.index();
         let mut mem = vec![];
-        let (relocs, traps, stack_maps) = if options.check_translation {
+        let (relocs, traps, stack_maps, value_ranges) = if options.check_translation {
             if let Err(errors) = context.verify(fisa) {
                 anyhow::bail!("{}", pretty_verifier_error(&context.func, None, errors));
             }
-            (vec![], vec![], vec![])
+            Default::default()
         } else {
             let compiled_code = context
                 .compile_and_emit(isa, &mut mem)
@@ -281,6 +281,7 @@ fn handle_module(options: &Options, path: &Path, name: &str, fisa: FlagsOrIsa) -
                 compiled_code.buffer.relocs().to_vec(),
                 compiled_code.buffer.traps().to_vec(),
                 compiled_code.buffer.stack_maps().to_vec(),
+                Some(compiled_code.value_labels_ranges),
             )
         };
 
@@ -296,11 +297,6 @@ fn handle_module(options: &Options, path: &Path, name: &str, fisa: FlagsOrIsa) -
             {
                 println!("; Exported as \"{}\"", export_name);
             }
-            let value_ranges = if options.value_ranges {
-                Some(context.compiled_code().unwrap().value_labels_ranges.clone())
-            } else {
-                None
-            };
             println!(
                 "{}",
                 context.func.display_with(DisplayFunctionAnnotations {

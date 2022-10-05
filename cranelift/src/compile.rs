@@ -78,16 +78,15 @@ fn handle_module(options: &Options, path: &Path, name: &str, fisa: FlagsOrIsa) -
             }
 
             if options.disasm {
-                let result = context.compiled_code().unwrap();
                 print_all(
                     isa,
                     &context.func.params,
                     &mem,
                     code_info.total_size,
                     options.print,
-                    result.buffer.relocs(),
-                    result.buffer.traps(),
-                    result.buffer.stack_maps(),
+                    compiled_code.buffer.relocs(),
+                    compiled_code.buffer.traps(),
+                    compiled_code.buffer.stack_maps(),
                 )?;
             }
         }

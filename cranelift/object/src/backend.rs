@@ -323,15 +323,15 @@ impl Module for ObjectModule {
         info!("defining function {}: {}", func_id, ctx.func.display());
         let mut code: Vec<u8> = Vec::new();
 
-        let res = ctx.compile_and_emit(self.isa(), &mut code)?;
-        let alignment = res.alignment as u64;
+        let compiled_code = ctx.compile_and_emit(self.isa(), &mut code)?;
+        let alignment = compiled_code.alignment as u64;
 
         self.define_function_bytes(
             func_id,
             &ctx.func,
             alignment,
             &code,
-            ctx.compiled_code().unwrap().buffer.relocs(),
+            compiled_code.buffer.relocs(),
         )
     }
 
