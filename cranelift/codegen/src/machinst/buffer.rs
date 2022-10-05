@@ -291,7 +291,7 @@ impl MachBufferFinalized<Stencil> {
 #[cfg_attr(feature = "enable-serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct MachBufferFinalized<T: CompilePhase> {
     /// The buffer contents, as raw bytes.
-    pub(crate) data: SmallVec<[u8; 1024]>,
+    pub(crate) data: Box<[u8]>,
     /// Any relocations referring to this code. Note that only *external*
     /// relocations are tracked here; references to labels within the buffer are
     /// resolved before emission.
@@ -1286,7 +1286,7 @@ impl<I: VCodeInst> MachBuffer<I> {
         srclocs.sort_by_key(|entry| entry.start);
 
         MachBufferFinalized {
-            data: self.data,
+            data: self.data.into_boxed_slice(),
             relocs: self.relocs,
             traps: self.traps,
             call_sites: self.call_sites,
@@ -1429,7 +1429,7 @@ impl<T: CompilePhase> MachBufferFinalized<T> {
         // This is pretty lame, but whatever ..
         use std::fmt::Write;
         let mut s = String::with_capacity(self.data.len() * 2);
-        for b in &self.data {
+        for b in self.data.iter() {
             write!(&mut s, "{:02X}", b).unwrap();
         }
         s
@@ -1452,8 +1452,7 @@ impl<T: CompilePhase> MachBufferFinalized<T> {
     }
 
     pub fn take_data(&mut self) -> Box<[u8]> {
-        let data = std::mem::take(&mut self.data);
-        data.into_boxed_slice()
+        std::mem::take(&mut self.data)
     }
 
     /// Get the list of external relocations for this code.
