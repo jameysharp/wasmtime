@@ -274,8 +274,7 @@ impl MachBufferFinalized<Stencil> {
             relocs: self.relocs,
             traps: self.traps,
             call_sites: self.call_sites,
-            srclocs: self
-                .srclocs
+            srclocs: Vec::from(self.srclocs)
                 .into_iter()
                 .map(|srcloc| srcloc.apply_params(params))
                 .collect(),
@@ -295,17 +294,17 @@ pub struct MachBufferFinalized<T: CompilePhase> {
     /// Any relocations referring to this code. Note that only *external*
     /// relocations are tracked here; references to labels within the buffer are
     /// resolved before emission.
-    pub(crate) relocs: SmallVec<[MachReloc; 16]>,
+    pub(crate) relocs: Box<[MachReloc]>,
     /// Any trap records referring to this code.
-    pub(crate) traps: SmallVec<[MachTrap; 16]>,
+    pub(crate) traps: Box<[MachTrap]>,
     /// Any call site records referring to this code.
-    pub(crate) call_sites: SmallVec<[MachCallSite; 16]>,
+    pub(crate) call_sites: Box<[MachCallSite]>,
     /// Any source location mappings referring to this code.
-    pub(crate) srclocs: SmallVec<[T::MachSrcLocType; 64]>,
+    pub(crate) srclocs: Box<[T::MachSrcLocType]>,
     /// Any stack maps referring to this code.
-    pub(crate) stack_maps: SmallVec<[MachStackMap; 8]>,
+    pub(crate) stack_maps: Box<[MachStackMap]>,
     /// Any unwind info at a given location.
-    pub unwind_info: SmallVec<[(CodeOffset, UnwindInst); 8]>,
+    pub unwind_info: Box<[(CodeOffset, UnwindInst)]>,
 }
 
 const UNKNOWN_LABEL_OFFSET: CodeOffset = 0xffff_ffff;
@@ -1282,17 +1281,16 @@ impl<I: VCodeInst> MachBuffer<I> {
 
         self.finish_emission_maybe_forcing_veneers(false);
 
-        let mut srclocs = self.srclocs;
-        srclocs.sort_by_key(|entry| entry.start);
+        self.srclocs.sort_by_key(|entry| entry.start);
 
         MachBufferFinalized {
             data: self.data.into_boxed_slice(),
-            relocs: self.relocs,
-            traps: self.traps,
-            call_sites: self.call_sites,
-            srclocs,
-            stack_maps: self.stack_maps,
-            unwind_info: self.unwind_info,
+            relocs: self.relocs.into_boxed_slice(),
+            traps: self.traps.into_boxed_slice(),
+            call_sites: self.call_sites.into_boxed_slice(),
+            srclocs: self.srclocs.into_boxed_slice(),
+            stack_maps: self.stack_maps.into_boxed_slice(),
+            unwind_info: self.unwind_info.into_boxed_slice(),
         }
     }
 
