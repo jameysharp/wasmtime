@@ -249,15 +249,14 @@ fn handle_module(options: &Options, path: &Path, name: &str, fisa: FlagsOrIsa) -
 
         let mut saved_size = None;
         let func_index = num_func_imports + def_index.index();
-        let mut mem = vec![];
-        let (relocs, traps, stack_maps, value_ranges) = if options.check_translation {
+        let (mem, relocs, traps, stack_maps, value_ranges) = if options.check_translation {
             if let Err(errors) = context.verify(fisa) {
                 anyhow::bail!("{}", pretty_verifier_error(&context.func, None, errors));
             }
             Default::default()
         } else {
-            let compiled_code = context
-                .compile_and_emit(isa, &mut mem)
+            let mut compiled_code = context
+                .compile(isa)
                 .map_err(|err| anyhow::anyhow!("{}", pretty_error(&err.func, err.inner)))?;
             let code_info = compiled_code.code_info();
 
@@ -278,6 +277,7 @@ fn handle_module(options: &Options, path: &Path, name: &str, fisa: FlagsOrIsa) -
                 saved_size = Some(code_info.total_size);
             }
             (
+                compiled_code.buffer.take_data(),
                 compiled_code.buffer.relocs().to_vec(),
                 compiled_code.buffer.traps().to_vec(),
                 compiled_code.buffer.stack_maps().to_vec(),

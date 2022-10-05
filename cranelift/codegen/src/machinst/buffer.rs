@@ -149,6 +149,7 @@ use crate::machinst::{
 };
 use crate::timing;
 use crate::trace;
+use alloc::boxed::Box;
 use cranelift_entity::{entity_impl, SecondaryMap};
 use smallvec::SmallVec;
 use std::convert::TryFrom;
@@ -1448,6 +1449,11 @@ impl<T: CompilePhase> MachBufferFinalized<T> {
         // to add the appropriate relocations in this case.
 
         &self.data[..]
+    }
+
+    pub fn take_data(&mut self) -> Box<[u8]> {
+        let data = std::mem::take(&mut self.data);
+        data.into_boxed_slice()
     }
 
     /// Get the list of external relocations for this code.

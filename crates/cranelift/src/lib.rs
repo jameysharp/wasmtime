@@ -27,7 +27,7 @@ type CompiledFunctions = PrimaryMap<DefinedFuncIndex, CompiledFunction>;
 #[derive(Default)]
 pub struct CompiledFunction {
     /// The machine code for this function.
-    body: Vec<u8>,
+    body: Box<[u8]>,
 
     /// The unwind information.
     unwind_info: Option<UnwindInfo>,
@@ -38,9 +38,9 @@ pub struct CompiledFunction {
 
     /// Metadata about traps in this module, mapping code offsets to the trap
     /// that they may cause.
-    traps: Vec<TrapInformation>,
+    traps: Box<[TrapInformation]>,
 
-    relocations: Vec<Relocation>,
+    relocations: Box<[Relocation]>,
     value_labels_ranges: cranelift_codegen::ValueLabelsRanges,
     sized_stack_slots: ir::StackSlots,
 

@@ -321,9 +321,9 @@ impl Module for ObjectModule {
         ctx: &mut cranelift_codegen::Context,
     ) -> ModuleResult<ModuleCompiledFunction> {
         info!("defining function {}: {}", func_id, ctx.func.display());
-        let mut code: Vec<u8> = Vec::new();
 
-        let compiled_code = ctx.compile_and_emit(self.isa(), &mut code)?;
+        let mut compiled_code = ctx.compile(self.isa())?;
+        let code = compiled_code.buffer.take_data();
         let alignment = compiled_code.alignment as u64;
 
         self.define_function_bytes(

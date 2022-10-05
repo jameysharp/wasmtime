@@ -30,7 +30,6 @@ use crate::verifier::{verify_context, VerifierErrors, VerifierResult};
 use crate::{timing, CompileError};
 #[cfg(feature = "souper-harvest")]
 use alloc::string::String;
-use alloc::vec::Vec;
 
 #[cfg(feature = "souper-harvest")]
 use crate::souper_harvest::do_souper_harvest;
@@ -89,27 +88,6 @@ impl Context {
     /// `MachBackend` backend.
     pub fn set_disasm(&mut self, val: bool) {
         self.want_disasm = val;
-    }
-
-    /// Compile the function, and emit machine code into a `Vec<u8>`.
-    ///
-    /// Run the function through all the passes necessary to generate code for the target ISA
-    /// represented by `isa`, as well as the final step of emitting machine code into a
-    /// `Vec<u8>`. The machine code is not relocated. Instead, any relocations can be obtained
-    /// from `CompiledCode`.
-    ///
-    /// This function calls `compile`, taking care to resize `mem` as
-    /// needed, so it provides a safe interface.
-    ///
-    /// Returns information about the function's code and read-only data.
-    pub fn compile_and_emit(
-        &mut self,
-        isa: &dyn TargetIsa,
-        mem: &mut Vec<u8>,
-    ) -> CompileResult<CompiledCode> {
-        let compiled_code = self.compile(isa)?;
-        mem.extend_from_slice(compiled_code.code_buffer());
-        Ok(compiled_code)
     }
 
     /// Internally compiles the function into a stencil.

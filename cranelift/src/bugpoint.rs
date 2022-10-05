@@ -946,9 +946,6 @@ struct CrashCheckContext<'a> {
     /// Cached `Context`, to prevent repeated allocation.
     context: Context,
 
-    /// Cached code memory, to prevent repeated allocation.
-    code_memory: Vec<u8>,
-
     /// The target isa to compile for.
     isa: &'a dyn TargetIsa,
 }
@@ -978,7 +975,6 @@ impl<'a> CrashCheckContext<'a> {
     fn new(isa: &'a dyn TargetIsa) -> Self {
         CrashCheckContext {
             context: Context::new(),
-            code_memory: Vec::new(),
             isa,
         }
     }
@@ -986,7 +982,6 @@ impl<'a> CrashCheckContext<'a> {
     #[cfg_attr(test, allow(unreachable_code))]
     fn check_for_crash(&mut self, func: &Function) -> CheckResult {
         self.context.clear();
-        self.code_memory.clear();
 
         self.context.func = func.clone();
 
@@ -1027,9 +1022,7 @@ impl<'a> CrashCheckContext<'a> {
         std::panic::set_hook(Box::new(|_| {})); // silence panics
 
         let res = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _ = self
-                .context
-                .compile_and_emit(self.isa, &mut self.code_memory);
+            let _ = self.context.compile(self.isa);
         })) {
             Ok(()) => CheckResult::Succeed,
             Err(err) => CheckResult::Crash(get_panic_string(err)),

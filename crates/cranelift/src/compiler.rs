@@ -269,8 +269,8 @@ impl wasmtime_environ::Compiler for Compiler {
         let mut validator = validator.into_validator(validator_allocations);
         func_translator.translate_body(&mut validator, body, &mut context.func, &mut func_env)?;
 
-        let (compiled_code, code_buf) =
-            compile_maybe_cached(&mut context, isa, cache_ctx.as_mut())?;
+        let mut compiled_code = compile_maybe_cached(&mut context, isa, cache_ctx.as_mut())?;
+        let code_buf = compiled_code.buffer.take_data();
         let alignment = compiled_code.alignment;
 
         let func_relocs = compiled_code
@@ -487,7 +487,7 @@ mod incremental_cache {
         context: &mut Context,
         isa: &dyn TargetIsa,
         cache_ctx: Option<&mut IncrementalCacheContext>,
-    ) -> Result<(CompiledCode, Vec<u8>), CompileError> {
+    ) -> Result<CompiledCode, CompileError> {
         let cache_ctx = match cache_ctx {
             Some(ctx) => ctx,
             None => return compile_uncached(context, isa),
@@ -504,8 +504,7 @@ mod incremental_cache {
             cache_ctx.num_cached += 1;
         }
 
-        let code_buf = compiled_code.code_buffer().to_vec();
-        Ok((compiled_code, code_buf))
+        Ok(compiled_code)
     }
 }
 
@@ -517,19 +516,17 @@ fn compile_maybe_cached(
     context: &mut Context,
     isa: &dyn TargetIsa,
     _cache_ctx: Option<&mut IncrementalCacheContext>,
-) -> Result<(CompiledCode, Vec<u8>), CompileError> {
+) -> Result<CompiledCode, CompileError> {
     compile_uncached(context, isa)
 }
 
 fn compile_uncached(
     context: &mut Context,
     isa: &dyn TargetIsa,
-) -> Result<(CompiledCode, Vec<u8>), CompileError> {
-    let mut code_buf = Vec::new();
-    let compiled_code = context
-        .compile_and_emit(isa, &mut code_buf)
-        .map_err(|error| CompileError::Codegen(pretty_error(&error.func, error.inner)))?;
-    Ok((compiled_code, code_buf))
+) -> Result<CompiledCode, CompileError> {
+    context
+        .compile(isa)
+        .map_err(|error| CompileError::Codegen(pretty_error(&error.func, error.inner)))
 }
 
 fn to_flag_value(v: &settings::Value) -> FlagValue {
@@ -809,7 +806,8 @@ impl Compiler {
         cache_ctx: Option<&mut IncrementalCacheContext>,
         isa: &dyn TargetIsa,
     ) -> Result<CompiledFunction, CompileError> {
-        let (compiled_code, code_buf) = compile_maybe_cached(context, isa, cache_ctx)?;
+        let mut compiled_code = compile_maybe_cached(context, isa, cache_ctx)?;
+        let code_buf = compiled_code.buffer.take_data();
 
         // Processing relocations isn't the hardest thing in the world here but
         // no trampoline should currently generate a relocation, so assert that

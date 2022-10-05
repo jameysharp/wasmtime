@@ -65,12 +65,12 @@ fn handle_module(options: &Options, path: &Path, name: &str, fisa: FlagsOrIsa) -
         if let Some(isa) = isa {
             let mut context = Context::new();
             context.func = func;
-            let mut mem = vec![];
 
             // Compile and encode the result to machine code.
-            let compiled_code = context
-                .compile_and_emit(isa, &mut mem)
+            let mut compiled_code = context
+                .compile(isa)
                 .map_err(|err| anyhow::anyhow!("{}", pretty_error(&err.func, err.inner)))?;
+            let mem = compiled_code.buffer.take_data();
             let code_info = compiled_code.code_info();
 
             if options.print {
