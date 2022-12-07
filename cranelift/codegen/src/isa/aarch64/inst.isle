@@ -1607,8 +1607,8 @@
 
 ;; Extractor helpers for various immmediate constants ;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-(decl pure partial imm_logic_from_u64 (Type u64) ImmLogic)
-(extern constructor imm_logic_from_u64 imm_logic_from_u64)
+(decl imm_logic_from_ty_mask (ImmLogic) Type)
+(extern extractor imm_logic_from_ty_mask imm_logic_from_ty_mask)
 
 (decl pure partial imm_logic_from_imm64 (Type Imm64) ImmLogic)
 (extern constructor imm_logic_from_imm64 imm_logic_from_imm64)
@@ -3613,8 +3613,7 @@
 ;; cmp   tmp, #0
 ;; csetm res, ne
 (rule 3
-      (lower_bmask out_ty (fits_in_16 in_ty) val)
-      (if-let mask_bits (imm_logic_from_u64 $I32 (ty_mask in_ty)))
+      (lower_bmask out_ty (imm_logic_from_ty_mask mask_bits) val)
       (let ((masked Reg (and_imm $I32 (value_regs_get val 0) mask_bits)))
         (lower_bmask out_ty $I32 masked)))
 
