@@ -1,4 +1,4 @@
-use crate::ir::{Value, ValueList};
+use crate::ir::Value;
 use alloc::boxed::Box;
 use alloc::vec::Vec;
 use smallvec::SmallVec;
@@ -19,7 +19,7 @@ pub use crate::machinst::{
 pub use crate::settings::TlsModel;
 
 pub type Unit = ();
-pub type ValueSlice = (ValueList, usize);
+pub type ValueSlice<'a> = (&'a [Value], usize);
 pub type ValueArray2 = [Value; 2];
 pub type ValueArray3 = [Value; 3];
 pub type WritableReg = Writable<Reg>;
@@ -168,13 +168,13 @@ macro_rules! isle_lower_prelude_methods {
 
         #[inline]
         fn value_list_slice(&mut self, list: ValueList) -> ValueSlice {
-            (list, 0)
+            (list.as_slice(&self.lower_ctx.dfg().value_lists), 0)
         }
 
         #[inline]
         fn value_slice_empty(&mut self, slice: ValueSlice) -> Option<()> {
-            let (list, off) = slice;
-            if off >= list.len(&self.lower_ctx.dfg().value_lists) {
+            let (slice, off) = slice;
+            if off >= slice.len() {
                 Some(())
             } else {
                 None
@@ -183,9 +183,9 @@ macro_rules! isle_lower_prelude_methods {
 
         #[inline]
         fn value_slice_unwrap(&mut self, slice: ValueSlice) -> Option<(Value, ValueSlice)> {
-            let (list, off) = slice;
-            if let Some(val) = list.get(off, &self.lower_ctx.dfg().value_lists) {
-                Some((val, (list, off + 1)))
+            let (slice, off) = slice;
+            if let Some(&val) = slice.get(off) {
+                Some((val, (slice, off + 1)))
             } else {
                 None
             }
@@ -193,15 +193,14 @@ macro_rules! isle_lower_prelude_methods {
 
         #[inline]
         fn value_slice_len(&mut self, slice: ValueSlice) -> usize {
-            let (list, off) = slice;
-            list.len(&self.lower_ctx.dfg().value_lists) - off
+            let (slice, off) = slice;
+            slice.len() - off
         }
 
         #[inline]
         fn value_slice_get(&mut self, slice: ValueSlice, idx: usize) -> Value {
-            let (list, off) = slice;
-            list.get(off + idx, &self.lower_ctx.dfg().value_lists)
-                .unwrap()
+            let (slice, off) = slice;
+            slice[off + idx]
         }
 
         #[inline]
@@ -211,7 +210,7 @@ macro_rules! isle_lower_prelude_methods {
 
         #[inline]
         fn inst_results(&mut self, inst: Inst) -> ValueSlice {
-            (self.lower_ctx.dfg().inst_results_list(inst), 0)
+            (self.lower_ctx.dfg().inst_results(inst), 0)
         }
 
         #[inline]
@@ -221,7 +220,7 @@ macro_rules! isle_lower_prelude_methods {
 
         #[inline]
         fn inst_data(&mut self, inst: Inst) -> InstructionData {
-            self.lower_ctx.dfg().insts[inst]
+            self.lower_ctx.dfg().insts[inst].clone()
         }
 
         #[inline]
@@ -573,12 +572,9 @@ macro_rules! isle_lower_prelude_methods {
         }
 
         /// Generate the return instruction.
-        fn gen_return(&mut self, (list, off): ValueSlice) {
-            let rets = (off..list.len(&self.lower_ctx.dfg().value_lists))
-                .map(|ix| {
-                    let val = list.get(ix, &self.lower_ctx.dfg().value_lists).unwrap();
-                    self.put_in_regs(val)
-                })
+        fn gen_return(&mut self, (slice, off): ValueSlice) {
+            let rets = (off..slice.len())
+                .map(|ix| self.put_in_regs(slice[ix]))
                 .collect();
             self.lower_ctx.gen_return(rets);
         }
@@ -611,10 +607,7 @@ macro_rules! isle_prelude_caller_methods {
             )
             .unwrap();
 
-            assert_eq!(
-                inputs.len(&self.lower_ctx.dfg().value_lists) - off,
-                sig.params.len()
-            );
+            assert_eq!(inputs.len() - off, sig.params.len());
 
             self.gen_call_common(abi, num_rets, caller, args)
         }
@@ -640,10 +633,7 @@ macro_rules! isle_prelude_caller_methods {
             )
             .unwrap();
 
-            assert_eq!(
-                inputs.len(&self.lower_ctx.dfg().value_lists) - off,
-                sig.params.len()
-            );
+            assert_eq!(inputs.len() - off, sig.params.len());
 
             self.gen_call_common(abi, num_rets, caller, args)
         }
@@ -667,16 +657,10 @@ macro_rules! isle_prelude_method_helpers {
 
             let num_args = self.lower_ctx.sigs().num_args(abi);
 
-            assert_eq!(
-                inputs.len(&self.lower_ctx.dfg().value_lists) - off,
-                num_args
-            );
+            assert_eq!(inputs.len() - off, num_args);
             let mut arg_regs = vec![];
             for i in 0..num_args {
-                let input = inputs
-                    .get(off + i, &self.lower_ctx.dfg().value_lists)
-                    .unwrap();
-                arg_regs.push(self.put_in_regs(input));
+                arg_regs.push(self.put_in_regs(inputs[off + i]));
             }
             for (i, arg_regs) in arg_regs.iter().enumerate() {
                 caller.emit_copy_regs_to_buffer(self.lower_ctx, i, *arg_regs);

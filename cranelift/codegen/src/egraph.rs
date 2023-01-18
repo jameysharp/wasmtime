@@ -99,7 +99,7 @@ pub(crate) enum NewOrExistingInst {
 impl NewOrExistingInst {
     fn get_inst_key<'a>(&'a self, dfg: &'a DataFlowGraph) -> (Type, InstructionData) {
         match self {
-            NewOrExistingInst::New(data, ty) => (*ty, *data),
+            NewOrExistingInst::New(data, ty) => (*ty, data.clone()),
             NewOrExistingInst::Existing(inst) => {
                 let ty = dfg.ctrl_typevar(*inst);
                 (ty, dfg.insts[*inst].clone())

@@ -910,7 +910,7 @@ impl DataFlowGraph {
 
     /// Return all the results of an instruction as ValueList.
     pub fn inst_results_list(&self, inst: Inst) -> ValueList {
-        self.results[inst]
+        self.results[inst].clone()
     }
 
     /// Create a union of two values.
