@@ -132,7 +132,7 @@ impl<'short, 'long> InstBuilderBase<'short> for FuncInstBuilder<'short, 'long> {
                             .jump_tables
                             .get(table)
                             .expect("declared jump table");
-                        let mut unique: smallvec::SmallVec<[Block; 2]> =
+                        let mut unique: smallvec::SmallVec<[Block; 8]> =
                             core::iter::once(destination)
                                 .chain(table.iter().copied())
                                 .collect();
