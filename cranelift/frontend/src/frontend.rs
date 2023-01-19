@@ -3,7 +3,7 @@ use crate::ssa::{SSABuilder, SideEffects};
 use crate::variable::Variable;
 use core::fmt::{self, Debug};
 use cranelift_codegen::cursor::{Cursor, FuncCursor};
-use cranelift_codegen::entity::{EntityRef, EntitySet, SecondaryMap};
+use cranelift_codegen::entity::{EntityRef, SecondaryMap};
 use cranelift_codegen::ir;
 use cranelift_codegen::ir::condcodes::IntCC;
 use cranelift_codegen::ir::{
@@ -26,6 +26,7 @@ pub struct FunctionBuilderContext {
     ssa: SSABuilder,
     status: SecondaryMap<Block, BlockStatus>,
     types: SecondaryMap<Variable, Type>,
+    successors: alloc::vec::Vec<Block>,
 }
 
 /// Temporary object used to build a single Cranelift IR `Function`.
@@ -126,24 +127,24 @@ impl<'short, 'long> InstBuilderBase<'short> for FuncInstBuilder<'short, 'long> {
                         // Unlike all other jumps/branches, jump tables are
                         // capable of having the same successor appear
                         // multiple times, so we must deduplicate.
-                        let mut unique = EntitySet::<Block>::new();
-                        for dest_block in self
+                        let table = self
                             .builder
                             .func
                             .jump_tables
                             .get(table)
-                            .expect("you are referencing an undeclared jump table")
-                            .iter()
-                            .filter(|&dest_block| unique.insert(*dest_block))
-                        {
+                            .expect("declared jump table");
+                        let unique = &mut self.builder.func_ctx.successors;
+                        unique.extend(core::iter::once(destination).chain(table.iter().copied()));
+                        unique.sort_unstable();
+                        unique.dedup();
+                        for dest_block in unique.drain(..) {
                             // Call `declare_block_predecessor` instead of `declare_successor` for
                             // avoiding the borrow checker.
                             self.builder
                                 .func_ctx
                                 .ssa
-                                .declare_block_predecessor(*dest_block, inst);
+                                .declare_block_predecessor(dest_block, inst);
                         }
-                        self.builder.declare_successor(destination, inst);
                     }
                 }
             }
