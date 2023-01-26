@@ -243,10 +243,7 @@ impl Switch {
                 "Jump tables bigger than 2^32-1 are not yet supported"
             );
 
-            let mut jt_data = JumpTableData::new();
-            for block in blocks {
-                jt_data.push_entry(block);
-            }
+            let jt_data = JumpTableData::with_blocks(blocks);
             let jump_table = bx.create_jump_table(jt_data);
 
             bx.switch_to_block(jt_block);
