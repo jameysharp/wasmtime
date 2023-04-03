@@ -77,7 +77,7 @@ where
     // Borrowed from EgraphPass:
     pub(crate) func: &'opt mut Function,
     pub(crate) value_to_opt_value: &'opt mut SecondaryMap<Value, Value>,
-    pub(crate) gvn_map: &'opt mut CtxHashMap<(Type, InstructionData), Value>,
+    pub(crate) gvn_map: &'opt mut CtxHashMap<(Type, InstructionData), Inst>,
     pub(crate) effectful_gvn_map: &'opt mut ScopedHashMap<(Type, InstructionData), Value>,
     pub(crate) eclasses: &'opt mut UnionFind<Value>,
     pub(crate) remat_values: &'opt mut FxHashSet<Value>,
@@ -152,52 +152,56 @@ where
         // the value-map to rewrite uses of its results to the results
         // of the original (existing) instruction. If not, optimize
         // the new instruction.
-        if let Some(&orig_result) = self
+        if let Some(&orig_inst) = self
             .gvn_map
             .get(&inst.get_inst_key(&self.func.dfg), &gvn_context)
         {
             self.stats.pure_inst_deduped += 1;
+            let orig_results = self.func.dfg.inst_results(orig_inst);
             if let NewOrExistingInst::Existing(inst) = inst {
-                debug_assert_eq!(self.func.dfg.inst_results(inst).len(), 1);
-                let result = self.func.dfg.first_result(inst);
-                self.value_to_opt_value[result] = orig_result;
-                self.eclasses.union(result, orig_result);
-                self.stats.union += 1;
-                result
+                let results = self.func.dfg.inst_results(inst);
+                debug_assert_eq!(results.len(), orig_results.len());
+                for (&result, &orig_result) in results.iter().zip(orig_results) {
+                    self.value_to_opt_value[result] = orig_result;
+                    self.eclasses.union(result, orig_result);
+                    self.stats.union += 1;
+                }
+                results[0]
             } else {
-                orig_result
+                orig_results[0]
             }
         } else {
             // Now actually insert the InstructionData and attach
             // result value (exactly one).
-            let (inst, result, ty) = match inst {
+            let (inst, results, ty) = match inst {
                 NewOrExistingInst::New(data, typevar) => {
                     let inst = self.func.dfg.make_inst(data);
                     // TODO: reuse return value?
                     self.func.dfg.make_inst_results(inst, typevar);
-                    let result = self.func.dfg.first_result(inst);
+                    let results = self.func.dfg.inst_results(inst);
                     // Add to eclass unionfind.
-                    self.eclasses.add(result);
+                    for &result in results {
+                        self.eclasses.add(result);
+                    }
                     // New inst. We need to do the analysis of its result.
-                    (inst, result, typevar)
+                    (inst, results, typevar)
                 }
                 NewOrExistingInst::Existing(inst) => {
-                    let result = self.func.dfg.first_result(inst);
+                    let results = self.func.dfg.inst_results(inst);
                     let ty = self.func.dfg.ctrl_typevar(inst);
-                    (inst, result, ty)
+                    (inst, results, ty)
                 }
             };
+
+            let result = results[0];
 
             let opt_value = self.optimize_pure_enode(inst);
             let gvn_context = GVNContext {
                 union_find: self.eclasses,
                 value_lists: &self.func.dfg.value_lists,
             };
-            self.gvn_map.insert(
-                (ty, self.func.dfg.insts[inst].clone()),
-                opt_value,
-                &gvn_context,
-            );
+            self.gvn_map
+                .insert((ty, self.func.dfg.insts[inst].clone()), inst, &gvn_context);
             self.value_to_opt_value[result] = opt_value;
             opt_value
         }
@@ -431,7 +435,7 @@ impl<'a> EgraphPass<'a> {
         // Note also that we keep the controlling typevar (the `Type`
         // in the tuple below) because it may disambiguate
         // instructions that are identical except for type.
-        let mut gvn_map: CtxHashMap<(Type, InstructionData), Value> =
+        let mut gvn_map: CtxHashMap<(Type, InstructionData), Inst> =
             CtxHashMap::with_capacity(cursor.func.dfg.num_values());
         // Map from instruction to value for GVN'ing of effectful but
         // idempotent ops, which remain in the side-effecting
