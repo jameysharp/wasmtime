@@ -592,6 +592,100 @@ pub trait PatternVisitor {
     ) -> Vec<Self::PatternId>;
 }
 
+#[derive(Debug)]
+enum PatternInst {
+    Bind {
+        var: VarId,
+    },
+    MatchEqual {
+        var: VarId,
+        ty: TypeId,
+    },
+    MatchInt {
+        ty: TypeId,
+        value: i128,
+    },
+    MatchPrim {
+        ty: TypeId,
+        value: Sym,
+    },
+    MatchVariant {
+        ty: TypeId,
+        arg_tys: Box<[TypeId]>,
+        variant: VariantId,
+    },
+    Extract {
+        ret_ty: TypeId,
+        output_tys: Box<[TypeId]>,
+        term: TermId,
+        infallible: bool,
+        multi: bool,
+    },
+    Pop,
+}
+
+impl PatternInst {
+    fn run<V: PatternVisitor>(
+        pattern: &[Self],
+        visitor: &mut V,
+        input: V::PatternId,
+        vars: &mut HashMap<VarId, V::PatternId>,
+    ) {
+        let mut stack = vec![input];
+        for inst in pattern {
+            let input = *stack.last().unwrap();
+            match *inst {
+                PatternInst::Bind { var } => {
+                    assert!(!vars.contains_key(&var));
+                    vars.insert(var, input);
+                }
+                PatternInst::MatchEqual { var, ty } => {
+                    let var_val = vars
+                        .get(&var)
+                        .copied()
+                        .expect("Variable should already be bound");
+                    visitor.add_match_equal(input, var_val, ty);
+                }
+                PatternInst::MatchInt { ty, value } => visitor.add_match_int(input, ty, value),
+                PatternInst::MatchPrim { ty, value } => visitor.add_match_prim(input, ty, value),
+                PatternInst::MatchVariant {
+                    ty,
+                    ref arg_tys,
+                    variant,
+                } => stack.extend(
+                    visitor
+                        .add_match_variant(input, ty, arg_tys, variant)
+                        .into_iter()
+                        .rev(),
+                ),
+                PatternInst::Extract {
+                    ret_ty,
+                    ref output_tys,
+                    term,
+                    infallible,
+                    multi,
+                } => stack.extend(
+                    visitor
+                        .add_extract(
+                            input,
+                            ret_ty,
+                            output_tys.to_vec(),
+                            term,
+                            infallible && !multi,
+                            multi,
+                        )
+                        .into_iter()
+                        .rev(),
+                ),
+                PatternInst::Pop => {
+                    stack.pop();
+                }
+            }
+        }
+        debug_assert_eq!(stack.len(), 1);
+    }
+}
+
 impl Pattern {
     /// Get this pattern's type.
     pub fn ty(&self) -> TypeId {
@@ -606,38 +700,24 @@ impl Pattern {
         }
     }
 
-    /// Recursively visit every sub-pattern.
-    pub fn visit<V: PatternVisitor>(
-        &self,
-        visitor: &mut V,
-        input: V::PatternId,
-        termenv: &TermEnv,
-        vars: &mut HashMap<VarId, V::PatternId>,
-    ) {
+    fn compile(&self, insts: &mut Vec<PatternInst>, termenv: &TermEnv) {
         match self {
             &Pattern::BindPattern(_ty, var, ref subpat) => {
-                // Bind the appropriate variable and recurse.
-                assert!(!vars.contains_key(&var));
-                vars.insert(var, input);
-                subpat.visit(visitor, input, termenv, vars);
+                insts.push(PatternInst::Bind { var });
+                subpat.compile(insts, termenv);
             }
-            &Pattern::Var(ty, var) => {
-                // Assert that the value matches the existing bound var.
-                let var_val = vars
-                    .get(&var)
-                    .copied()
-                    .expect("Variable should already be bound");
-                visitor.add_match_equal(input, var_val, ty);
-            }
-            &Pattern::ConstInt(ty, value) => visitor.add_match_int(input, ty, value),
-            &Pattern::ConstPrim(ty, value) => visitor.add_match_prim(input, ty, value),
+            &Pattern::Var(ty, var) => insts.push(PatternInst::MatchEqual { var, ty }),
+            &Pattern::ConstInt(ty, value) => insts.push(PatternInst::MatchInt { ty, value }),
+            &Pattern::ConstPrim(ty, value) => insts.push(PatternInst::MatchPrim { ty, value }),
             &Pattern::Term(ty, term, ref args) => {
                 // Determine whether the term has an external extractor or not.
                 let termdata = &termenv.terms[term.index()];
-                let arg_values = match &termdata.kind {
-                    TermKind::EnumVariant { variant } => {
-                        visitor.add_match_variant(input, ty, &termdata.arg_tys, *variant)
-                    }
+                match termdata.kind {
+                    TermKind::EnumVariant { variant } => insts.push(PatternInst::MatchVariant {
+                        ty,
+                        arg_tys: termdata.arg_tys.clone().into(),
+                        variant,
+                    }),
                     TermKind::Decl {
                         extractor_kind: None,
                         ..
@@ -651,37 +731,44 @@ impl Pattern {
                         panic!("Should have been expanded away")
                     }
                     TermKind::Decl {
-                        flags,
+                        ref flags,
                         extractor_kind: Some(ExtractorKind::ExternalExtractor { infallible, .. }),
                         ..
-                    } => {
-                        // Evaluate all `input` args.
-                        let output_tys = args.iter().map(|arg| arg.ty()).collect();
-
-                        // Invoke the extractor.
-                        visitor.add_extract(
-                            input,
-                            termdata.ret_ty,
-                            output_tys,
-                            term,
-                            *infallible && !flags.multi,
-                            flags.multi,
-                        )
-                    }
-                };
-                for (pat, val) in args.iter().zip(arg_values) {
-                    pat.visit(visitor, val, termenv, vars);
+                    } => insts.push(PatternInst::Extract {
+                        ret_ty: termdata.ret_ty,
+                        output_tys: termdata.arg_tys.clone().into(),
+                        term,
+                        infallible,
+                        multi: flags.multi,
+                    }),
+                }
+                for pat in args {
+                    pat.compile(insts, termenv);
+                    insts.push(PatternInst::Pop);
                 }
             }
             &Pattern::And(_ty, ref children) => {
                 for child in children {
-                    child.visit(visitor, input, termenv, vars);
+                    child.compile(insts, termenv);
                 }
             }
             &Pattern::Wildcard(_ty) => {
                 // Nothing!
             }
         }
+    }
+
+    /// Recursively visit every sub-pattern.
+    pub fn visit<V: PatternVisitor>(
+        &self,
+        visitor: &mut V,
+        input: V::PatternId,
+        termenv: &TermEnv,
+        vars: &mut HashMap<VarId, V::PatternId>,
+    ) {
+        let mut insts = Vec::new();
+        self.compile(&mut insts, termenv);
+        PatternInst::run(&insts, visitor, input, vars);
     }
 }
 
