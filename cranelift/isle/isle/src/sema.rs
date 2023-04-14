@@ -804,6 +804,85 @@ pub trait ExprVisitor {
     ) -> Self::ExprId;
 }
 
+enum ExprInst {
+    Bind {
+        var: VarId,
+    },
+    Var {
+        var: VarId,
+    },
+    ConstInt {
+        ty: TypeId,
+        val: i128,
+    },
+    ConstPrim {
+        ty: TypeId,
+        val: Sym,
+    },
+    CreateVariant {
+        input_tys: Box<[TypeId]>,
+        ty: TypeId,
+        variant: VariantId,
+    },
+    Construct {
+        input_tys: Box<[TypeId]>,
+        ty: TypeId,
+        term: TermId,
+        pure: bool,
+        infallible: bool,
+        multi: bool,
+    },
+}
+
+impl ExprInst {
+    fn run<V: ExprVisitor>(
+        expr: &[ExprInst],
+        visitor: &mut V,
+        vars: &mut HashMap<VarId, V::ExprId>,
+    ) -> V::ExprId {
+        let mut stack = Vec::new();
+        for inst in expr {
+            let subexpr = match *inst {
+                ExprInst::Bind { var } => {
+                    vars.insert(var, stack.pop().unwrap());
+                    continue;
+                }
+                ExprInst::Var { var } => vars[&var],
+                ExprInst::ConstInt { ty, val } => visitor.add_const_int(ty, val),
+                ExprInst::ConstPrim { ty, val } => visitor.add_const_prim(ty, val),
+                ExprInst::CreateVariant {
+                    ref input_tys,
+                    ty,
+                    variant,
+                } => {
+                    let arg_values_tys = stack
+                        .drain(stack.len() - input_tys.len()..)
+                        .zip(input_tys.iter().copied())
+                        .collect();
+                    visitor.add_create_variant(arg_values_tys, ty, variant)
+                }
+                ExprInst::Construct {
+                    ref input_tys,
+                    ty,
+                    term,
+                    pure,
+                    infallible,
+                    multi,
+                } => {
+                    let arg_values_tys = stack
+                        .drain(stack.len() - input_tys.len()..)
+                        .zip(input_tys.iter().copied())
+                        .collect();
+                    visitor.add_construct(arg_values_tys, ty, term, pure, infallible, multi)
+                }
+            };
+            stack.push(subexpr);
+        }
+        debug_assert_eq!(stack.len(), 1);
+        stack.pop().unwrap()
+    }
+}
+
 impl Expr {
     /// Get this expression's type.
     pub fn ty(&self) -> TypeId {
@@ -816,55 +895,45 @@ impl Expr {
         }
     }
 
-    /// Recursively visit every subexpression.
-    pub fn visit<V: ExprVisitor>(
-        &self,
-        visitor: &mut V,
-        termenv: &TermEnv,
-        vars: &HashMap<VarId, V::ExprId>,
-    ) -> V::ExprId {
-        log!("Expr::visit: expr {:?}", self);
+    fn compile(&self, insts: &mut Vec<ExprInst>, termenv: &TermEnv) {
         match self {
-            &Expr::ConstInt(ty, val) => visitor.add_const_int(ty, val),
-            &Expr::ConstPrim(ty, val) => visitor.add_const_prim(ty, val),
+            &Expr::ConstInt(ty, val) => insts.push(ExprInst::ConstInt { ty, val }),
+            &Expr::ConstPrim(ty, val) => insts.push(ExprInst::ConstPrim { ty, val }),
             &Expr::Let {
-                ty: _ty,
                 ref bindings,
                 ref body,
+                ..
             } => {
-                let mut vars = vars.clone();
                 for &(var, _var_ty, ref var_expr) in bindings {
-                    let var_value = var_expr.visit(visitor, termenv, &vars);
-                    vars.insert(var, var_value);
+                    var_expr.compile(insts, termenv);
+                    insts.push(ExprInst::Bind { var });
                 }
-                body.visit(visitor, termenv, &vars)
+                body.compile(insts, termenv);
             }
-            &Expr::Var(_ty, var_id) => *vars.get(&var_id).unwrap(),
+            &Expr::Var(_ty, var) => insts.push(ExprInst::Var { var }),
             &Expr::Term(ty, term, ref arg_exprs) => {
+                for expr in arg_exprs {
+                    expr.compile(insts, termenv);
+                }
                 let termdata = &termenv.terms[term.index()];
-                let arg_values_tys = arg_exprs
-                    .iter()
-                    .map(|arg_expr| arg_expr.visit(visitor, termenv, vars))
-                    .zip(termdata.arg_tys.iter().copied())
-                    .collect();
                 match &termdata.kind {
-                    TermKind::EnumVariant { variant } => {
-                        visitor.add_create_variant(arg_values_tys, ty, *variant)
-                    }
+                    &TermKind::EnumVariant { variant } => insts.push(ExprInst::CreateVariant {
+                        input_tys: termdata.arg_tys.clone().into(),
+                        ty,
+                        variant,
+                    }),
                     TermKind::Decl {
                         constructor_kind: Some(_),
                         flags,
                         ..
-                    } => {
-                        visitor.add_construct(
-                            arg_values_tys,
-                            ty,
-                            term,
-                            flags.pure,
-                            /* infallible = */ !flags.partial,
-                            flags.multi,
-                        )
-                    }
+                    } => insts.push(ExprInst::Construct {
+                        input_tys: termdata.arg_tys.clone().into(),
+                        ty,
+                        term,
+                        pure: flags.pure,
+                        infallible: !flags.partial,
+                        multi: flags.multi,
+                    }),
                     TermKind::Decl {
                         constructor_kind: None,
                         ..
@@ -880,13 +949,17 @@ impl Expr {
         termenv: &TermEnv,
         vars: &HashMap<VarId, <V::PatternVisitor as PatternVisitor>::PatternId>,
     ) -> V::Expr {
-        let var_exprs = vars
+        log!("Expr::visit: expr {:?}", self);
+        let mut insts = Vec::new();
+        self.compile(&mut insts, termenv);
+
+        let mut var_exprs = vars
             .iter()
             .map(|(&var, &val)| (var, visitor.pattern_as_expr(val)))
             .collect();
         visitor.add_expr(|visitor| VisitedExpr {
             ty: self.ty(),
-            value: self.visit(visitor, termenv, &var_exprs),
+            value: ExprInst::run(&insts, visitor, &mut var_exprs),
         })
     }
 }
