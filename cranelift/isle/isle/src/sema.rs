@@ -628,10 +628,9 @@ impl PatternInst {
     fn run<V: PatternVisitor>(
         pattern: &[Self],
         visitor: &mut V,
-        input: V::PatternId,
+        stack: &mut Vec<V::PatternId>,
         vars: &mut HashMap<VarId, V::PatternId>,
     ) {
-        let mut stack = vec![input];
         for inst in pattern {
             let input = *stack.last().unwrap();
             match *inst {
@@ -682,7 +681,6 @@ impl PatternInst {
                 }
             }
         }
-        debug_assert_eq!(stack.len(), 1);
     }
 }
 
@@ -768,7 +766,10 @@ impl Pattern {
     ) {
         let mut insts = Vec::new();
         self.compile(&mut insts, termenv);
-        PatternInst::run(&insts, visitor, input, vars);
+        insts.push(PatternInst::Pop);
+        let mut stack = vec![input];
+        PatternInst::run(&insts, visitor, &mut stack, vars);
+        debug_assert_eq!(stack.len(), 0);
     }
 }
 
@@ -949,14 +950,28 @@ impl Rule {
     /// that was returned from [RuleVisitor::add_expr] when that function was called on the rule's
     /// right-hand side.
     pub fn visit<V: RuleVisitor>(&self, visitor: &mut V, termenv: &TermEnv) -> V::Expr {
-        let mut vars = HashMap::new();
+        let mut insts = Vec::new();
+
+        let termdata = &termenv.terms[self.root_term.index()];
+        let mut stack: Vec<_> = termdata
+            .arg_tys
+            .iter()
+            .enumerate()
+            .map(|(i, &arg_ty)| visitor.add_arg(i, arg_ty))
+            .collect();
+
+        // Ensure that argument patterns are popped in left-to-right order.
+        stack.reverse();
 
         // Visit the pattern, starting from the root input value.
-        let termdata = &termenv.terms[self.root_term.index()];
-        for (i, (subpat, &arg_ty)) in self.args.iter().zip(termdata.arg_tys.iter()).enumerate() {
-            let value = visitor.add_arg(i, arg_ty);
-            visitor.add_pattern(|visitor| subpat.visit(visitor, value, termenv, &mut vars));
+        for subpat in self.args.iter() {
+            subpat.compile(&mut insts, termenv);
+            insts.push(PatternInst::Pop);
         }
+
+        let mut vars = HashMap::new();
+        visitor.add_pattern(|visitor| PatternInst::run(&insts, visitor, &mut stack, &mut vars));
+        debug_assert_eq!(stack.len(), 0);
 
         // Visit the `if-let` clauses, using `V::ExprVisitor` for the sub-exprs (right-hand sides).
         for iflet in self.iflets.iter() {
