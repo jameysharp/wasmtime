@@ -1116,6 +1116,30 @@ impl DataFlowGraph {
             self.value_type(self.first_result(inst))
         }
     }
+
+    /// Get the sign-extended value of the constant defined by the given
+    /// instruction, if any.
+    pub fn signed_const(&self, inst: Inst) -> Option<i64> {
+        let (imm, shift) = self.get_const(inst)?;
+        Some((imm << shift) >> shift)
+    }
+
+    /// Get the zero-extended value of the constant defined by the given
+    /// instruction, if any.
+    pub fn unsigned_const(&self, inst: Inst) -> Option<u64> {
+        let (imm, shift) = self.get_const(inst)?;
+        Some(((imm as u64) << shift) >> shift)
+    }
+
+    fn get_const(&self, inst: Inst) -> Option<(i64, u32)> {
+        let imm = match self.insts[inst] {
+            InstructionData::UnaryImm { imm, .. } => imm.bits(),
+            _ => return None,
+        };
+        let ty = self.value_type(self.first_result(inst));
+        let shift = 64 - ty.bits();
+        Some((imm, shift))
+    }
 }
 
 /// basic blocks.
