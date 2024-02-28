@@ -200,7 +200,6 @@ impl<'a, 'b, 'c> generated_code::Context for IsleContext<'a, 'b, 'c> {
         let value = self
             .ctx
             .insert_pure_enode(NewOrExistingInst::New(op.clone(), ty));
-        trace!("make_inst_ctor: {:?} -> {}", op, value);
         value
     }
 

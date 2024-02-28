@@ -15,6 +15,8 @@ use crate::opts::IsleContext;
 use crate::scoped_hash_map::{Entry as ScopedEntry, ScopedHashMap};
 use crate::trace;
 use crate::unionfind::UnionFind;
+use crate::write::{FuncWriter, PlainWriter};
+use alloc::string::String;
 use cranelift_control::ControlPlane;
 use cranelift_entity::packed_option::ReservedValue;
 use cranelift_entity::SecondaryMap;
@@ -163,16 +165,26 @@ where
             .get(&inst.get_inst_key(&self.func.dfg), &gvn_context)
         {
             self.stats.pure_inst_deduped += 1;
-            if let NewOrExistingInst::Existing(inst) = inst {
-                debug_assert_eq!(self.func.dfg.inst_results(inst).len(), 1);
-                let result = self.func.dfg.first_result(inst);
-                self.value_to_opt_value[result] = orig_result;
-                self.eclasses.union(result, orig_result);
-                self.func.dfg.merge_facts(result, orig_result);
-                self.stats.union += 1;
-                result
-            } else {
-                orig_result
+            match inst {
+                NewOrExistingInst::Existing(inst) => {
+                    debug_assert_eq!(self.func.dfg.inst_results(inst).len(), 1);
+                    let result = self.func.dfg.first_result(inst);
+                    self.value_to_opt_value[result] = orig_result;
+                    self.eclasses.union(result, orig_result);
+                    self.func.dfg.merge_facts(result, orig_result);
+                    self.stats.union += 1;
+                    trace!("merge inst (GVN): use {} for {}", result, inst);
+                    result
+                }
+                NewOrExistingInst::New(data, typevar) => {
+                    trace!(
+                        "discard inst (GVN): {} {:?} -> old {}",
+                        typevar,
+                        data,
+                        orig_result
+                    );
+                    orig_result
+                }
             }
         } else {
             // Now actually insert the InstructionData and attach
@@ -183,6 +195,7 @@ where
                     // TODO: reuse return value?
                     self.func.dfg.make_inst_results(inst, typevar);
                     let result = self.func.dfg.first_result(inst);
+                    trace!("new inst: {} {:?} -> {}", typevar, data, result);
                     // Add to eclass unionfind.
                     self.eclasses.add(result);
                     // New inst. We need to do the analysis of its result.
@@ -238,7 +251,11 @@ where
             return orig_value;
         }
         self.rewrite_depth += 1;
-        trace!("Incrementing rewrite depth; now {}", self.rewrite_depth);
+        trace!(
+            "Incrementing rewrite depth for {}; now {}",
+            inst,
+            self.rewrite_depth
+        );
 
         // Invoke the ISLE toplevel constructor, getting all new
         // values produced as equivalents to this value.
@@ -251,8 +268,10 @@ where
             &mut optimized_values,
         );
         trace!(
-            "  -> returned from ISLE, generated {} optimized values",
-            optimized_values.len()
+            "Returned from ISLE for {} with {} optimized values: {:?}",
+            orig_value,
+            optimized_values.len(),
+            optimized_values
         );
 
         // It's not supposed to matter what order `simplify` returns values in.
@@ -268,11 +287,6 @@ where
         // original, if present.)
         let mut union_value = orig_value;
         for optimized_value in optimized_values.drain(..) {
-            trace!(
-                "Returned from ISLE for {}, got {:?}",
-                orig_value,
-                optimized_value
-            );
             if optimized_value == orig_value {
                 trace!(" -> same as orig value; skipping");
                 continue;
@@ -296,7 +310,13 @@ where
             self.func.dfg.merge_facts(old_union_value, optimized_value);
             self.eclasses.union(old_union_value, union_value);
         }
+        //self.subsume_values.clear();
 
+        trace!(
+            "Decrementing rewrite depth for {}; done with {}",
+            inst,
+            self.rewrite_depth
+        );
         self.rewrite_depth -= 1;
 
         debug_assert!(self.optimized_values.is_empty());
@@ -413,11 +433,17 @@ impl<'a> EgraphPass<'a> {
 
         trace!("egraph built:\n{}\n", self.func.display());
         if cfg!(feature = "trace-log") {
+            let mut fmt = PlainWriter;
+            let mut buf = String::new();
+            let aliases = SecondaryMap::new();
             for (value, def) in self.func.dfg.values_and_defs() {
                 trace!(" -> {} = {:?}", value, def);
                 match def {
                     ValueDef::Result(i, 0) => {
-                        trace!("  -> {} = {:?}", i, self.func.dfg.insts[i]);
+                        fmt.write_instruction(&mut buf, self.func, &aliases, i, 0)
+                            .unwrap();
+                        trace!("  -> {}: {}", i, buf);
+                        buf.clear();
                     }
                     _ => {}
                 }
