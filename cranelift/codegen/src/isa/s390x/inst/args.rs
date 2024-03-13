@@ -106,6 +106,21 @@ impl MemArg {
         !self.get_flags().notrap()
     }
 
+    /// Change the memory flags to include the notrap flag.
+    pub fn set_notrap(&mut self) {
+        match self {
+            MemArg::BXD12 { flags, .. }
+            | MemArg::BXD20 { flags, .. }
+            | MemArg::Symbol { flags, .. }
+            | MemArg::RegOffset { flags, .. } => flags.set_notrap(),
+            // These cases don't have memflags so self.get_flags() returns
+            // MemFlags::trusted(), which already includes the notrap flag.
+            MemArg::Label { .. }
+            | MemArg::InitialSPOffset { .. }
+            | MemArg::NominalSPOffset { .. } => {}
+        }
+    }
+
     /// Edit registers with allocations.
     pub fn with_allocs(&self, allocs: &mut AllocationConsumer<'_>) -> Self {
         match self {

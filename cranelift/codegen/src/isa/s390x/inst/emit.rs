@@ -164,7 +164,6 @@ pub fn mem_emit(
     opcode_rx: Option<u16>,
     opcode_rxy: Option<u16>,
     opcode_ril: Option<u16>,
-    add_trap: bool,
     sink: &mut MachBuffer<Inst>,
     emit_info: &EmitInfo,
     state: &mut EmitState,
@@ -176,7 +175,7 @@ pub fn mem_emit(
             have_d12: opcode_rx.is_some(),
             have_d20: opcode_rxy.is_some(),
             have_pcrel: opcode_ril.is_some(),
-            have_unaligned_pcrel: opcode_ril.is_some() && !add_trap,
+            have_unaligned_pcrel: opcode_ril == Some(0xc00), // LoadAddr
             have_index: true,
         },
     );
@@ -184,7 +183,7 @@ pub fn mem_emit(
         inst.emit(&[], sink, emit_info, state);
     }
 
-    if add_trap && mem.can_trap() {
+    if mem.can_trap() {
         sink.add_trap(TrapCode::HeapOutOfBounds);
     }
 
@@ -225,7 +224,6 @@ pub fn mem_rs_emit(
     mem: &MemArg,
     opcode_rs: Option<u16>,
     opcode_rsy: Option<u16>,
-    add_trap: bool,
     sink: &mut MachBuffer<Inst>,
     emit_info: &EmitInfo,
     state: &mut EmitState,
@@ -245,7 +243,7 @@ pub fn mem_rs_emit(
         inst.emit(&[], sink, emit_info, state);
     }
 
-    if add_trap && mem.can_trap() {
+    if mem.can_trap() {
         sink.add_trap(TrapCode::HeapOutOfBounds);
     }
 
@@ -274,7 +272,6 @@ pub fn mem_imm8_emit(
     mem: &MemArg,
     opcode_si: u16,
     opcode_siy: u16,
-    add_trap: bool,
     sink: &mut MachBuffer<Inst>,
     emit_info: &EmitInfo,
     state: &mut EmitState,
@@ -294,7 +291,7 @@ pub fn mem_imm8_emit(
         inst.emit(&[], sink, emit_info, state);
     }
 
-    if add_trap && mem.can_trap() {
+    if mem.can_trap() {
         sink.add_trap(TrapCode::HeapOutOfBounds);
     }
 
@@ -319,7 +316,6 @@ pub fn mem_imm16_emit(
     imm: i16,
     mem: &MemArg,
     opcode_sil: u16,
-    add_trap: bool,
     sink: &mut MachBuffer<Inst>,
     emit_info: &EmitInfo,
     state: &mut EmitState,
@@ -339,7 +335,7 @@ pub fn mem_imm16_emit(
         inst.emit(&[], sink, emit_info, state);
     }
 
-    if add_trap && mem.can_trap() {
+    if mem.can_trap() {
         sink.add_trap(TrapCode::HeapOutOfBounds);
     }
 
@@ -359,11 +355,10 @@ pub fn mem_mem_emit(
     src: &MemArgPair,
     len_minus_one: u8,
     opcode_ss: u8,
-    add_trap: bool,
     sink: &mut MachBuffer<Inst>,
     _state: &mut EmitState,
 ) {
-    if add_trap && (dst.can_trap() || src.can_trap()) {
+    if dst.can_trap() || src.can_trap() {
         sink.add_trap(TrapCode::HeapOutOfBounds);
     }
 
@@ -385,7 +380,6 @@ pub fn mem_vrx_emit(
     mem: &MemArg,
     opcode: u16,
     m3: u8,
-    add_trap: bool,
     sink: &mut MachBuffer<Inst>,
     emit_info: &EmitInfo,
     state: &mut EmitState,
@@ -405,7 +399,7 @@ pub fn mem_vrx_emit(
         inst.emit(&[], sink, emit_info, state);
     }
 
-    if add_trap && mem.can_trap() {
+    if mem.can_trap() {
         sink.add_trap(TrapCode::HeapOutOfBounds);
     }
 
@@ -1555,7 +1549,7 @@ impl Inst {
                 };
                 let rd = rd.to_reg();
                 mem_emit(
-                    rd, &mem, opcode_rx, opcode_rxy, None, true, sink, emit_info, state,
+                    rd, &mem, opcode_rx, opcode_rxy, None, sink, emit_info, state,
                 );
             }
             &Inst::AluRSImm16 {
@@ -1955,7 +1949,7 @@ impl Inst {
                     CmpOp::CmpL64Ext32 => (None, Some(0xe331), Some(0xc6e)),  // CLGF, CLGFRL
                 };
                 mem_emit(
-                    rn, &mem, opcode_rx, opcode_rxy, opcode_ril, true, sink, emit_info, state,
+                    rn, &mem, opcode_rx, opcode_rxy, opcode_ril, sink, emit_info, state,
                 );
             }
             &Inst::CmpRSImm16 { op, rn, imm } => {
@@ -2073,17 +2067,7 @@ impl Inst {
                 };
 
                 let rd = rd.to_reg();
-                mem_rs_emit(
-                    rd,
-                    rn,
-                    &mem,
-                    None,
-                    Some(opcode),
-                    true,
-                    sink,
-                    emit_info,
-                    state,
-                );
+                mem_rs_emit(rd, rn, &mem, None, Some(opcode), sink, emit_info, state);
             }
             &Inst::Loop { ref body, cond } => {
                 // This sequence is *one* instruction in the vcode, and is expanded only here at
@@ -2143,9 +2127,7 @@ impl Inst {
                 };
 
                 let rd = rd.to_reg();
-                mem_rs_emit(
-                    rd, rn, &mem, opcode_rs, opcode_rsy, true, sink, emit_info, state,
-                );
+                mem_rs_emit(rd, rn, &mem, opcode_rs, opcode_rsy, sink, emit_info, state);
             }
             &Inst::Fence => {
                 put(sink, &enc_e(0x07e0));
@@ -2189,7 +2171,7 @@ impl Inst {
                 };
                 let rd = rd.to_reg();
                 mem_emit(
-                    rd, &mem, opcode_rx, opcode_rxy, opcode_ril, true, sink, emit_info, state,
+                    rd, &mem, opcode_rx, opcode_rxy, opcode_ril, sink, emit_info, state,
                 );
             }
 
@@ -2214,7 +2196,7 @@ impl Inst {
                     _ => unreachable!(),
                 };
                 mem_emit(
-                    rd, &mem, opcode_rx, opcode_rxy, opcode_ril, true, sink, emit_info, state,
+                    rd, &mem, opcode_rx, opcode_rxy, opcode_ril, sink, emit_info, state,
                 );
             }
             &Inst::StoreImm8 { imm, ref mem } => {
@@ -2222,9 +2204,7 @@ impl Inst {
 
                 let opcode_si = 0x92; // MVI
                 let opcode_siy = 0xeb52; // MVIY
-                mem_imm8_emit(
-                    imm, &mem, opcode_si, opcode_siy, true, sink, emit_info, state,
-                );
+                mem_imm8_emit(imm, &mem, opcode_si, opcode_siy, sink, emit_info, state);
             }
             &Inst::StoreImm16 { imm, ref mem }
             | &Inst::StoreImm32SExt16 { imm, ref mem }
@@ -2237,7 +2217,7 @@ impl Inst {
                     &Inst::StoreImm64SExt16 { .. } => 0xe548, // MVGHI
                     _ => unreachable!(),
                 };
-                mem_imm16_emit(imm, &mem, opcode, true, sink, emit_info, state);
+                mem_imm16_emit(imm, &mem, opcode, sink, emit_info, state);
             }
             &Inst::Mvc {
                 ref dst,
@@ -2247,7 +2227,7 @@ impl Inst {
                 let dst = dst.with_allocs(allocs);
                 let src = src.with_allocs(allocs);
                 let opcode = 0xd2; // MVC
-                mem_mem_emit(&dst, &src, len_minus_one, opcode, true, sink, state);
+                mem_mem_emit(&dst, &src, len_minus_one, opcode, sink, state);
             }
 
             &Inst::LoadMultiple64 { rt, rt2, ref mem } => {
@@ -2256,45 +2236,26 @@ impl Inst {
                 let opcode = 0xeb04; // LMG
                 let rt = rt.to_reg();
                 let rt2 = rt2.to_reg();
-                mem_rs_emit(
-                    rt,
-                    rt2,
-                    &mem,
-                    None,
-                    Some(opcode),
-                    true,
-                    sink,
-                    emit_info,
-                    state,
-                );
+                mem_rs_emit(rt, rt2, &mem, None, Some(opcode), sink, emit_info, state);
             }
             &Inst::StoreMultiple64 { rt, rt2, ref mem } => {
                 let mem = mem.with_allocs(allocs);
 
                 let opcode = 0xeb24; // STMG
-                mem_rs_emit(
-                    rt,
-                    rt2,
-                    &mem,
-                    None,
-                    Some(opcode),
-                    true,
-                    sink,
-                    emit_info,
-                    state,
-                );
+                mem_rs_emit(rt, rt2, &mem, None, Some(opcode), sink, emit_info, state);
             }
 
             &Inst::LoadAddr { rd, ref mem } => {
                 let rd = allocs.next_writable(rd);
-                let mem = mem.with_allocs(allocs);
+                let mut mem = mem.with_allocs(allocs);
+                mem.set_notrap();
 
                 let opcode_rx = Some(0x41); // LA
                 let opcode_rxy = Some(0xe371); // LAY
                 let opcode_ril = Some(0xc00); // LARL
                 let rd = rd.to_reg();
                 mem_emit(
-                    rd, &mem, opcode_rx, opcode_rxy, opcode_ril, false, sink, emit_info, state,
+                    rd, &mem, opcode_rx, opcode_rxy, opcode_ril, sink, emit_info, state,
                 );
             }
 
@@ -3046,7 +3007,7 @@ impl Inst {
                     &Inst::VecLoadElt64Rev { .. } => (0xe607, 3),  // VLERG
                     _ => unreachable!(),
                 };
-                mem_vrx_emit(rd.to_reg(), &mem, opcode, m3, true, sink, emit_info, state);
+                mem_vrx_emit(rd.to_reg(), &mem, opcode, m3, sink, emit_info, state);
             }
             &Inst::VecStore { rd, ref mem }
             | &Inst::VecStoreRev { rd, ref mem }
@@ -3070,7 +3031,7 @@ impl Inst {
                     &Inst::VecStoreElt64Rev { .. } => (0xe60f, 3),  // VSTERG
                     _ => unreachable!(),
                 };
-                mem_vrx_emit(rd, &mem, opcode, m3, true, sink, emit_info, state);
+                mem_vrx_emit(rd, &mem, opcode, m3, sink, emit_info, state);
             }
             &Inst::VecLoadReplicate { size, rd, ref mem }
             | &Inst::VecLoadReplicateRev { size, rd, ref mem } => {
@@ -3087,7 +3048,7 @@ impl Inst {
                     (&Inst::VecLoadReplicateRev { .. }, 64) => (0xe605, 3), // VLREPBRG
                     _ => unreachable!(),
                 };
-                mem_vrx_emit(rd.to_reg(), &mem, opcode, m3, true, sink, emit_info, state);
+                mem_vrx_emit(rd.to_reg(), &mem, opcode, m3, sink, emit_info, state);
             }
 
             &Inst::VecMov { rd, rn } => {
@@ -3222,7 +3183,6 @@ impl Inst {
                     &mem,
                     opcode_vrx,
                     lane_imm.into(),
-                    true,
                     sink,
                     emit_info,
                     state,
@@ -3257,7 +3217,7 @@ impl Inst {
                 let rd = rd.to_reg();
                 if lane_imm == 0 && is_fpr(rd) && opcode_rx.is_some() {
                     mem_emit(
-                        rd, &mem, opcode_rx, opcode_rxy, None, true, sink, emit_info, state,
+                        rd, &mem, opcode_rx, opcode_rxy, None, sink, emit_info, state,
                     );
                 } else {
                     mem_vrx_emit(
@@ -3265,7 +3225,6 @@ impl Inst {
                         &mem,
                         opcode_vrx,
                         lane_imm.into(),
-                        true,
                         sink,
                         emit_info,
                         state,
@@ -3300,7 +3259,7 @@ impl Inst {
 
                 if lane_imm == 0 && is_fpr(rd) && opcode_rx.is_some() {
                     mem_emit(
-                        rd, &mem, opcode_rx, opcode_rxy, None, true, sink, emit_info, state,
+                        rd, &mem, opcode_rx, opcode_rxy, None, sink, emit_info, state,
                     );
                 } else {
                     mem_vrx_emit(
@@ -3308,7 +3267,6 @@ impl Inst {
                         &mem,
                         opcode_vrx,
                         lane_imm.into(),
-                        true,
                         sink,
                         emit_info,
                         state,
