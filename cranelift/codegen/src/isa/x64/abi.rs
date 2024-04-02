@@ -11,7 +11,7 @@ use crate::{CodegenError, CodegenResult};
 use alloc::boxed::Box;
 use alloc::vec::Vec;
 use args::*;
-use regalloc2::{MachineEnv, PReg, PRegSet, VReg};
+use regalloc2::{MachineEnv, PReg, PRegSet};
 use smallvec::{smallvec, SmallVec};
 use std::sync::OnceLock;
 
@@ -909,17 +909,14 @@ impl ABIMachineSpec for X64ABIMachineSpec {
         specified
     }
 
-    fn compute_frame_layout(
-        call_conv: CallConv,
+    fn compute_clobbers(
+        call_conv: isa::CallConv,
         flags: &settings::Flags,
         _sig: &Signature,
+        _outgoing_args_size: u32,
         regs: &[Writable<RealReg>],
-        _is_leaf: bool,
-        stack_args_size: u32,
-        fixed_frame_storage_size: u32,
-        outgoing_args_size: u32,
-    ) -> FrameLayout {
-        let mut regs: Vec<Writable<RealReg>> = match call_conv {
+    ) -> Vec<Writable<RealReg>> {
+        match call_conv {
             // The `winch` calling convention doesn't have any callee-save
             // registers.
             CallConv::Winch => vec![],
@@ -935,27 +932,24 @@ impl ABIMachineSpec for X64ABIMachineSpec {
                 .collect(),
             CallConv::Probestack => todo!("probestack?"),
             CallConv::WasmtimeSystemV | CallConv::AppleAarch64 => unreachable!(),
-        };
-        // Sort registers for deterministic code output. We can do an unstable sort because the
-        // registers will be unique (there are no dups).
-        regs.sort_unstable_by_key(|r| VReg::from(r.to_reg()).vreg());
-
-        // Compute clobber size.
-        let clobber_size = compute_clobber_size(&regs);
-
-        // Compute setup area size.
-        let setup_area_size = 16; // RBP, return address
-
-        // Return FrameLayout structure.
-        debug_assert!(outgoing_args_size == 0);
-        FrameLayout {
-            stack_args_size,
-            setup_area_size,
-            clobber_size,
-            fixed_frame_storage_size,
-            outgoing_args_size,
-            clobbered_callee_saves: regs,
         }
+    }
+
+    fn compute_clobber_size(regs: &[Writable<RealReg>]) -> u32 {
+        let mut clobbered_size = 0;
+        for reg in regs {
+            match reg.to_reg().class() {
+                RegClass::Int => {
+                    clobbered_size += 8;
+                }
+                RegClass::Float => {
+                    clobbered_size = align_to(clobbered_size, 16);
+                    clobbered_size += 16;
+                }
+                RegClass::Vector => unreachable!(),
+            }
+        }
+        align_to(clobbered_size, 16)
     }
 }
 
@@ -1197,23 +1191,6 @@ fn is_callee_save_fastcall(r: RealReg, enable_pinned_reg: bool) -> bool {
         },
         RegClass::Vector => unreachable!(),
     }
-}
-
-fn compute_clobber_size(clobbers: &[Writable<RealReg>]) -> u32 {
-    let mut clobbered_size = 0;
-    for reg in clobbers {
-        match reg.to_reg().class() {
-            RegClass::Int => {
-                clobbered_size += 8;
-            }
-            RegClass::Float => {
-                clobbered_size = align_to(clobbered_size, 16);
-                clobbered_size += 16;
-            }
-            RegClass::Vector => unreachable!(),
-        }
-    }
-    align_to(clobbered_size, 16)
 }
 
 const WINDOWS_CLOBBERS: PRegSet = windows_clobbers();

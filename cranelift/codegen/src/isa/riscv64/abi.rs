@@ -206,6 +206,18 @@ impl ABIMachineSpec for Riscv64MachineDeps {
     }
 
     fn fp_to_arg_offset(_call_conv: isa::CallConv, _flags: &settings::Flags) -> i64 {
+        // let setup_area_size = if flags.preserve_frame_pointers()
+        //     || !is_leaf
+        //     // The function arguments that are passed on the stack are addressed
+        //     // relative to the Frame Pointer.
+        //     || stack_args_size > 0
+        //     || clobber_size > 0
+        //     || fixed_frame_storage_size > 0
+        // {
+        //     16 // FP, LR
+        // } else {
+        //     0
+        // };
         // lr fp.
         16
     }
@@ -666,51 +678,33 @@ impl ABIMachineSpec for Riscv64MachineDeps {
         }
     }
 
-    fn compute_frame_layout(
+    fn compute_clobbers(
         call_conv: isa::CallConv,
-        flags: &settings::Flags,
+        _flags: &settings::Flags,
         _sig: &Signature,
+        _outgoing_args_size: u32,
         regs: &[Writable<RealReg>],
-        is_leaf: bool,
-        stack_args_size: u32,
-        fixed_frame_storage_size: u32,
-        outgoing_args_size: u32,
-    ) -> FrameLayout {
-        let mut regs: Vec<Writable<RealReg>> = regs
-            .iter()
+    ) -> Vec<Writable<RealReg>> {
+        regs.iter()
             .cloned()
             .filter(|r| is_reg_saved_in_prologue(call_conv, r.to_reg()))
-            .collect();
+            .collect()
+    }
 
-        regs.sort();
-
-        // Compute clobber size.
-        let clobber_size = compute_clobber_size(&regs);
-
-        // Compute linkage frame size.
-        let setup_area_size = if flags.preserve_frame_pointers()
-            || !is_leaf
-            // The function arguments that are passed on the stack are addressed
-            // relative to the Frame Pointer.
-            || stack_args_size > 0
-            || clobber_size > 0
-            || fixed_frame_storage_size > 0
-        {
-            16 // FP, LR
-        } else {
-            0
-        };
-
-        // Return FrameLayout structure.
-        debug_assert!(outgoing_args_size == 0);
-        FrameLayout {
-            stack_args_size,
-            setup_area_size,
-            clobber_size,
-            fixed_frame_storage_size,
-            outgoing_args_size,
-            clobbered_callee_saves: regs,
+    fn compute_clobber_size(regs: &[Writable<RealReg>]) -> u32 {
+        let mut clobbered_size = 0;
+        for reg in regs {
+            match reg.to_reg().class() {
+                RegClass::Int => {
+                    clobbered_size += 8;
+                }
+                RegClass::Float => {
+                    clobbered_size += 8;
+                }
+                RegClass::Vector => unimplemented!("Vector Size Clobbered"),
+            }
         }
+        align_to(clobbered_size, 16)
     }
 
     fn gen_inline_probestack(
@@ -807,22 +801,6 @@ fn is_reg_saved_in_prologue(conv: CallConv, reg: RealReg) -> bool {
         // All vector registers are caller saved.
         RegClass::Vector => false,
     }
-}
-
-fn compute_clobber_size(clobbers: &[Writable<RealReg>]) -> u32 {
-    let mut clobbered_size = 0;
-    for reg in clobbers {
-        match reg.to_reg().class() {
-            RegClass::Int => {
-                clobbered_size += 8;
-            }
-            RegClass::Float => {
-                clobbered_size += 8;
-            }
-            RegClass::Vector => unimplemented!("Vector Size Clobbered"),
-        }
-    }
-    align_to(clobbered_size, 16)
 }
 
 const fn default_clobbers() -> PRegSet {

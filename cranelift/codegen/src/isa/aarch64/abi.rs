@@ -14,7 +14,7 @@ use crate::settings;
 use crate::{CodegenError, CodegenResult};
 use alloc::boxed::Box;
 use alloc::vec::Vec;
-use regalloc2::{MachineEnv, PReg, PRegSet, VReg};
+use regalloc2::{MachineEnv, PReg, PRegSet};
 use smallvec::{smallvec, SmallVec};
 use std::sync::OnceLock;
 
@@ -40,39 +40,6 @@ impl Into<AMode> for StackAMode {
             StackAMode::SPOffset(off, ty) => AMode::SPOffset { off, ty },
         }
     }
-}
-
-// Returns the size of stack space needed to store the
-// `clobbered_callee_saved` registers.
-fn compute_clobber_size(clobbered_callee_saves: &[Writable<RealReg>]) -> u32 {
-    let mut int_regs = 0;
-    let mut vec_regs = 0;
-    for &reg in clobbered_callee_saves {
-        match reg.to_reg().class() {
-            RegClass::Int => {
-                int_regs += 1;
-            }
-            RegClass::Float => {
-                vec_regs += 1;
-            }
-            RegClass::Vector => unreachable!(),
-        }
-    }
-
-    // Round up to multiple of 2, to keep 16-byte stack alignment.
-    let int_save_bytes = (int_regs + (int_regs & 1)) * 8;
-    // The Procedure Call Standard for the Arm 64-bit Architecture
-    // (AAPCS64, including several related ABIs such as the one used by
-    // Windows) mandates saving only the bottom 8 bytes of the vector
-    // registers, so we round up the number of registers to ensure
-    // proper stack alignment (similarly to the situation with
-    // `int_reg`).
-    let vec_reg_size = 8;
-    let vec_save_padding = vec_regs & 1;
-    // FIXME: SVE: ABI is different to Neon, so do we treat all vec regs as Z-regs?
-    let vec_save_bytes = (vec_regs + vec_save_padding) * vec_reg_size;
-
-    int_save_bytes + vec_save_bytes
 }
 
 /// AArch64-specific ABI behavior. This struct just serves as an implementation
@@ -366,6 +333,18 @@ impl ABIMachineSpec for AArch64MachineDeps {
     }
 
     fn fp_to_arg_offset(_call_conv: isa::CallConv, _flags: &settings::Flags) -> i64 {
+        // let setup_area_size = if flags.preserve_frame_pointers()
+        //     || !is_leaf
+        //     // The function arguments that are passed on the stack are addressed
+        //     // relative to the Frame Pointer.
+        //     || stack_args_size > 0
+        //     || clobber_size > 0
+        //     || fixed_frame_storage_size > 0
+        // {
+        //     16 // FP, LR
+        // } else {
+        //     0
+        // };
         16 // frame pointer + return address.
     }
 
@@ -1129,55 +1108,50 @@ impl ABIMachineSpec for AArch64MachineDeps {
         }
     }
 
-    fn compute_frame_layout(
+    fn compute_clobbers(
         call_conv: isa::CallConv,
         flags: &settings::Flags,
         sig: &Signature,
+        _outgoing_args_size: u32,
         regs: &[Writable<RealReg>],
-        is_leaf: bool,
-        stack_args_size: u32,
-        fixed_frame_storage_size: u32,
-        outgoing_args_size: u32,
-    ) -> FrameLayout {
-        let mut regs: Vec<Writable<RealReg>> = regs
-            .iter()
+    ) -> Vec<Writable<RealReg>> {
+        regs.iter()
             .cloned()
             .filter(|r| {
                 is_reg_saved_in_prologue(call_conv, flags.enable_pinned_reg(), sig, r.to_reg())
             })
-            .collect();
+            .collect()
+    }
 
-        // Sort registers for deterministic code output. We can do an unstable
-        // sort because the registers will be unique (there are no dups).
-        regs.sort_unstable_by_key(|r| VReg::from(r.to_reg()).vreg());
-
-        // Compute clobber size.
-        let clobber_size = compute_clobber_size(&regs);
-
-        // Compute linkage frame size.
-        let setup_area_size = if flags.preserve_frame_pointers()
-            || !is_leaf
-            // The function arguments that are passed on the stack are addressed
-            // relative to the Frame Pointer.
-            || stack_args_size > 0
-            || clobber_size > 0
-            || fixed_frame_storage_size > 0
-        {
-            16 // FP, LR
-        } else {
-            0
-        };
-
-        // Return FrameLayout structure.
-        debug_assert!(outgoing_args_size == 0);
-        FrameLayout {
-            stack_args_size,
-            setup_area_size,
-            clobber_size,
-            fixed_frame_storage_size,
-            outgoing_args_size,
-            clobbered_callee_saves: regs,
+    fn compute_clobber_size(regs: &[Writable<RealReg>]) -> u32 {
+        let mut int_regs = 0;
+        let mut vec_regs = 0;
+        for &reg in regs {
+            match reg.to_reg().class() {
+                RegClass::Int => {
+                    int_regs += 1;
+                }
+                RegClass::Float => {
+                    vec_regs += 1;
+                }
+                RegClass::Vector => unreachable!(),
+            }
         }
+
+        // Round up to multiple of 2, to keep 16-byte stack alignment.
+        let int_save_bytes = (int_regs + (int_regs & 1)) * 8;
+        // The Procedure Call Standard for the Arm 64-bit Architecture
+        // (AAPCS64, including several related ABIs such as the one used by
+        // Windows) mandates saving only the bottom 8 bytes of the vector
+        // registers, so we round up the number of registers to ensure
+        // proper stack alignment (similarly to the situation with
+        // `int_reg`).
+        let vec_reg_size = 8;
+        let vec_save_padding = vec_regs & 1;
+        // FIXME: SVE: ABI is different to Neon, so do we treat all vec regs as Z-regs?
+        let vec_save_bytes = (vec_regs + vec_save_padding) * vec_reg_size;
+
+        int_save_bytes + vec_save_bytes
     }
 }
 

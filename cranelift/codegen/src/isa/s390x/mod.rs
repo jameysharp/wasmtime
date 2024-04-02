@@ -23,6 +23,7 @@ pub(crate) mod inst;
 mod lower;
 mod settings;
 
+use self::abi::REG_SAVE_AREA_SIZE;
 use self::inst::EmitInfo;
 
 /// A IBM Z backend.
@@ -54,9 +55,24 @@ impl S390xBackend {
         domtree: &DominatorTree,
         ctrl_plane: &mut ControlPlane,
     ) -> CodegenResult<(VCode<inst::Inst>, regalloc2::Output)> {
+        assert!(
+            !self.flags.enable_pinned_reg(),
+            "Pinned register not supported on s390x"
+        );
+
         let emit_info = EmitInfo::new(self.isa_flags.clone());
         let sigs = SigSet::new::<abi::S390xMachineDeps>(func, &self.flags)?;
-        let abi = abi::S390xCallee::new(func, self, &self.isa_flags, &sigs)?;
+        let mut abi = abi::S390xCallee::new(func, self, &self.isa_flags, &sigs)?;
+
+        // If the front end asks to preserve frame pointers (which we do not
+        // really have in the s390x ABI), we use the stack backchain instead.
+        // For this to work in all cases, we must allocate a stack frame with
+        // at least the outgoing register save area even in leaf functions.
+        // Update our caller's outgoing_args_size to reflect this.
+        if self.flags.preserve_frame_pointers() {
+            abi.accumulate_outgoing_args_size(REG_SAVE_AREA_SIZE);
+        }
+
         compile::compile::<S390xBackend>(func, domtree, self, abi, emit_info, sigs, ctrl_plane)
     }
 }

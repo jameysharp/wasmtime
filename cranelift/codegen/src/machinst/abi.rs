@@ -498,20 +498,20 @@ pub trait ABIMachineSpec {
     /// Generate a meta-instruction that adjusts the nominal SP offset.
     fn gen_nominal_sp_adj(amount: i32) -> Self::I;
 
-    /// Compute a FrameLayout structure containing a sorted list of all clobbered
-    /// registers that are callee-saved according to the ABI, as well as the sizes
-    /// of all parts of the stack frame.  The result is used to emit the prologue
-    /// and epilogue routines.
-    fn compute_frame_layout(
+    /// Return the clobbered registers that are callee-saved according to the
+    /// ABI. The result is used to emit the prologue and epilogue routines.
+    fn compute_clobbers(
         call_conv: isa::CallConv,
         flags: &settings::Flags,
         sig: &Signature,
-        regs: &[Writable<RealReg>],
-        is_leaf: bool,
-        stack_args_size: u32,
-        fixed_frame_storage_size: u32,
         outgoing_args_size: u32,
-    ) -> FrameLayout;
+        regs: &[Writable<RealReg>],
+    ) -> Vec<Writable<RealReg>>;
+
+    /// Given the clobbered registers that are callee-saved according to the
+    /// ABI, determine the size of the frame area needed to save them. The
+    /// result is used to emit the prologue and epilogue routines.
+    fn compute_clobber_size(regs: &[Writable<RealReg>]) -> u32;
 
     /// Generate the usual frame-setup sequence for this architecture: e.g.,
     /// `push rbp / mov rbp, rsp` on x86-64, or `stp fp, lr, [sp, #-16]!` on
@@ -1870,16 +1870,28 @@ impl<M: ABIMachineSpec> Callee<M> {
         let total_stacksize = self.stackslots_size + bytes * self.spillslots.unwrap() as u32;
         let mask = M::stack_align(self.call_conv) - 1;
         let total_stacksize = (total_stacksize + mask) & !mask; // 16-align the stack.
-        self.frame_layout = Some(M::compute_frame_layout(
+
+        let mut clobbered_callee_saves = M::compute_clobbers(
             self.call_conv,
             &self.flags,
             self.signature(),
-            &self.clobbered,
-            self.is_leaf,
-            self.stack_args_size(sigs),
-            total_stacksize,
             self.outgoing_args_size,
-        ));
+            &self.clobbered,
+        );
+        // Sort registers for deterministic code output. We can do an unstable sort because the
+        // registers will be unique (there are no dups).
+        clobbered_callee_saves.sort_unstable_by_key(|r| VReg::from(r.to_reg()).vreg());
+        let clobber_size = M::compute_clobber_size(&clobbered_callee_saves);
+
+        self.frame_layout = Some(FrameLayout {
+            stack_args_size: self.stack_args_size(sigs),
+            setup_area_size: u32::try_from(M::fp_to_arg_offset(self.call_conv, &self.flags))
+                .unwrap(),
+            clobber_size,
+            fixed_frame_storage_size: total_stacksize,
+            outgoing_args_size: self.outgoing_args_size,
+            clobbered_callee_saves,
+        });
     }
 
     /// Generate a prologue, post-regalloc.

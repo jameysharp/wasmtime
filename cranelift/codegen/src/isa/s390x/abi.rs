@@ -79,7 +79,7 @@ use crate::machinst::*;
 use crate::settings;
 use crate::{CodegenError, CodegenResult};
 use alloc::vec::Vec;
-use regalloc2::{MachineEnv, PReg, PRegSet};
+use regalloc2::{MachineEnv, PRegSet};
 use smallvec::{smallvec, SmallVec};
 use std::sync::OnceLock;
 
@@ -807,37 +807,18 @@ impl ABIMachineSpec for S390xMachineDeps {
         specified
     }
 
-    fn compute_frame_layout(
+    fn compute_clobbers(
         call_conv: isa::CallConv,
-        flags: &settings::Flags,
+        _flags: &settings::Flags,
         _sig: &Signature,
+        outgoing_args_size: u32,
         regs: &[Writable<RealReg>],
-        _is_leaf: bool,
-        stack_args_size: u32,
-        fixed_frame_storage_size: u32,
-        mut outgoing_args_size: u32,
-    ) -> FrameLayout {
-        assert!(
-            !flags.enable_pinned_reg(),
-            "Pinned register not supported on s390x"
-        );
-
+    ) -> Vec<Writable<RealReg>> {
         let mut regs: Vec<Writable<RealReg>> = regs
             .iter()
             .cloned()
             .filter(|r| is_reg_saved_in_prologue(call_conv, r.to_reg()))
             .collect();
-
-        // If the front end asks to preserve frame pointers (which we do not
-        // really have in the s390x ABI), we use the stack backchain instead.
-        // For this to work in all cases, we must allocate a stack frame with
-        // at least the outgoing register save area even in leaf functions.
-        // Update our caller's outgoing_args_size to reflect this.
-        if flags.preserve_frame_pointers() {
-            if outgoing_args_size < REG_SAVE_AREA_SIZE {
-                outgoing_args_size = REG_SAVE_AREA_SIZE;
-            }
-        }
 
         // We need to save/restore the link register in non-leaf functions.
         // This is not included in the clobber list because we have excluded
@@ -851,13 +832,13 @@ impl ABIMachineSpec for S390xMachineDeps {
             }
         }
 
-        // Sort registers for deterministic code output. We can do an unstable
-        // sort because the registers will be unique (there are no dups).
-        regs.sort_unstable_by_key(|r| PReg::from(r.to_reg()).index());
+        regs
+    }
 
+    fn compute_clobber_size(regs: &[Writable<RealReg>]) -> u32 {
         // Compute clobber size.  We only need to count FPR save slots.
         let mut clobber_size = 0;
-        for reg in &regs {
+        for reg in regs {
             match reg.to_reg().class() {
                 RegClass::Int => {}
                 RegClass::Float => {
@@ -866,16 +847,7 @@ impl ABIMachineSpec for S390xMachineDeps {
                 RegClass::Vector => unreachable!(),
             }
         }
-
-        // Return FrameLayout structure.
-        FrameLayout {
-            stack_args_size,
-            setup_area_size: 0,
-            clobber_size,
-            fixed_frame_storage_size,
-            outgoing_args_size,
-            clobbered_callee_saves: regs,
-        }
+        clobber_size
     }
 }
 
