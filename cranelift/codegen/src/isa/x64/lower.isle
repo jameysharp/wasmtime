@@ -1834,10 +1834,7 @@
 
 ;;;; Rules for `icmp` ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-(rule -2 (lower (icmp cc a @ (value_type (fits_in_64 ty)) b))
-      (lower_icmp_bool (emit_cmp cc a b)))
-
-(rule -1 (lower (icmp cc a @ (value_type $I128) b))
+(rule -1 (lower (icmp cc a b))
       (lower_icmp_bool (emit_cmp cc a b)))
 
 ;; Peephole optimization for `x < 0`, when x is a signed 64 bit value
@@ -2094,8 +2091,11 @@
 ;; instruction plus a `CMOV`; recall that `cmove_from_values` here may emit more
 ;; than one instruction for certain types (e.g., XMM-held, I128).
 
-(rule (lower (has_type ty (select (maybe_uextend (icmp cc a @ (value_type (fits_in_64 a_ty)) b)) x y)))
+(rule (lower (has_type ty (select (maybe_uextend (icmp cc a b)) x y)))
       (lower_select_icmp ty (emit_cmp cc a b) x y))
+
+(rule (lower (has_type ty (select (maybe_uextend (band a b)) x y)))
+      (lower_select_icmp ty (emit_test a b) x y))
 
 ;; Finally, we lower `select` from a condition value `c`. These rules are meant
 ;; to be the final, default lowerings if no other patterns matched above.
@@ -3308,6 +3308,9 @@
 (rule 2 (lower_branch (brif (maybe_uextend (icmp cc a b)) _ _) (two_targets then else))
         (emit_side_effect (jmp_cond_icmp (emit_cmp cc a b) then else)))
 
+(rule 2 (lower_branch (brif (maybe_uextend (band a b)) _ _) (two_targets then else))
+        (emit_side_effect (jmp_cond_icmp (emit_test a b) then else)))
+
 (rule 2 (lower_branch (brif (maybe_uextend (fcmp cc a b)) _ _) (two_targets then else))
         (emit_side_effect (jmp_cond_fcmp (emit_fcmp cc a b) then else)))
 
@@ -3359,6 +3362,9 @@
 
 (rule (lower (select_spectre_guard (icmp cc a b) x y))
       (select_icmp (emit_cmp cc a b) x y))
+
+(rule (lower (select_spectre_guard (band a b) x y))
+      (select_icmp (emit_test a b) x y))
 
 (rule -1 (lower (has_type ty (select_spectre_guard c @ (value_type (fits_in_64 a_ty)) x y)))
       (let ((size OperandSize (raw_operand_size_of_type a_ty))

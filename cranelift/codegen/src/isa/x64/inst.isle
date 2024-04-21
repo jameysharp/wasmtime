@@ -4836,6 +4836,30 @@
             (x64_alurmi_flags_side_effect (AluRmiROpcode.Sbb) $I64 a_hi b_hi))
           cc))
 
+(decl emit_test (Value Value) IcmpCondResult)
+
+(rule 0 (emit_test a @ (value_type ty) b)
+      (let ((size OperandSize (raw_operand_size_of_type ty)))
+        (icmp_cond_result (x64_test size a b) (CC.NZ))))
+
+;; As a special case, swap the arguments to the comparison when the LHS is a
+;; constant. This ensures that we avoid moving the constant into a register when
+;; performing the comparison.
+(rule 1 (emit_test (and (value_type ty) (simm32_from_value a)) b)
+      (let ((size OperandSize (raw_operand_size_of_type ty)))
+        (icmp_cond_result (x64_test size b a) (CC.NZ))))
+
+(rule 2 (emit_test a @ (value_type $I128) b)
+      (let ((a_lo Gpr (value_regs_get_gpr a 0))
+            (a_hi Gpr (value_regs_get_gpr a 1))
+            (b_lo Gpr (value_regs_get_gpr b 0))
+            (b_hi Gpr (value_regs_get_gpr b 1))
+            (and_lo Reg (with_flags_reg (x64_test (OperandSize.Size64) a_lo b_lo) (x64_setcc (CC.Z))))
+            (and_hi Reg (with_flags_reg (x64_test (OperandSize.Size64) a_hi b_hi) (x64_setcc (CC.Z)))))
+        (icmp_cond_result
+          (x64_test (OperandSize.Size8) and_lo and_hi)
+          (CC.Z))))
+
 (type FcmpCondResult
       (enum
         ;; The given condition code must be set.
