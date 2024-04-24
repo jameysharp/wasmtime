@@ -510,7 +510,7 @@ impl<I: VCodeInst> VCodeBuilder<I> {
 
     fn collect_operands(&mut self) {
         let allocatable = PRegSet::from(self.vcode.machine_env());
-        for (i, insn) in self.vcode.insts.iter().enumerate() {
+        for (i, insn) in self.vcode.insts.iter_mut().enumerate() {
             // Push operands from the instruction onto the operand list.
             //
             // We rename through the vreg alias table as we collect
@@ -557,6 +557,17 @@ impl<I: VCodeInst> VCodeBuilder<I> {
             trace!("operandcollector: block arg {:?} -> {:?}", arg, new_arg);
             *arg = new_arg;
         }
+
+        // Apply register aliases to the `reftyped_vregs` list since this list
+        // will be returned directly to `regalloc2` eventually and all
+        // operands/results of instructions will use the alias-resolved vregs
+        // from `regalloc2`'s perspective.
+        for reg in self.vcode.reftyped_vregs.iter_mut() {
+            *reg = VCode::<I>::resolve_vreg_alias_impl(&self.vcode.vreg_aliases, *reg);
+        }
+
+        // All aliases are resolved now, so remove them from the map.
+        self.vcode.vreg_aliases.clear();
     }
 
     /// Build the final VCode.
@@ -570,16 +581,8 @@ impl<I: VCodeInst> VCodeBuilder<I> {
         }
         self.collect_operands();
 
-        // Apply register aliases to the `reftyped_vregs` list since this list
-        // will be returned directly to `regalloc2` eventually and all
-        // operands/results of instructions will use the alias-resolved vregs
-        // from `regalloc2`'s perspective.
-        //
-        // Also note that `reftyped_vregs` can't have duplicates, so after the
-        // aliases are applied duplicates are removed.
-        for reg in self.vcode.reftyped_vregs.iter_mut() {
-            *reg = VCode::<I>::resolve_vreg_alias_impl(&self.vcode.vreg_aliases, *reg);
-        }
+        // `reftyped_vregs` must not have duplicates, so after the aliases are
+        // applied duplicates are removed.
         self.vcode.reftyped_vregs.sort();
         self.vcode.reftyped_vregs.dedup();
 
