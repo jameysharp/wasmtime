@@ -8,7 +8,7 @@ use crate::machinst::*;
 use crate::{settings, CodegenError, CodegenResult};
 use alloc::boxed::Box;
 use alloc::vec::Vec;
-use regalloc2::{PRegSet, VReg};
+use regalloc2::PRegSet;
 use smallvec::SmallVec;
 use std::fmt::Write;
 use std::string::{String, ToString};
@@ -389,10 +389,7 @@ impl Inst {
 //=============================================================================
 // Instructions: get_regs
 
-fn memarg_operands<F: Fn(VReg) -> VReg>(
-    memarg: &mut MemArg,
-    collector: &mut OperandCollector<'_, F>,
-) {
+fn memarg_operands(memarg: &mut MemArg, collector: &mut impl OperandVisitor) {
     match memarg {
         MemArg::BXD12 { base, index, .. } | MemArg::BXD20 { base, index, .. } => {
             collector.reg_use(base);
@@ -409,10 +406,7 @@ fn memarg_operands<F: Fn(VReg) -> VReg>(
     collector.reg_fixed_nonallocatable(gpr_preg(1));
 }
 
-fn s390x_get_operands<F: Fn(VReg) -> VReg>(
-    inst: &mut Inst,
-    collector: &mut OperandCollector<'_, F>,
-) {
+fn s390x_get_operands(inst: &mut Inst, collector: &mut impl OperandVisitor) {
     match inst {
         Inst::AluRRR { rd, rn, rm, .. } => {
             collector.reg_def(rd);
@@ -952,15 +946,44 @@ fn s390x_get_operands<F: Fn(VReg) -> VReg>(
             memarg_operands(mem, collector);
         }
         Inst::Loop { body, .. } => {
+            #[cfg(debug_assertions)]
+            struct NoReuseVisitor<'a>(&'a mut dyn OperandVisitor);
+
+            #[cfg(debug_assertions)]
+            impl OperandVisitor for NoReuseVisitor<'_> {
+                fn visit(
+                    &mut self,
+                    reg: &mut Reg,
+                    constraint: regalloc2::OperandConstraint,
+                    kind: regalloc2::OperandKind,
+                    pos: regalloc2::OperandPos,
+                ) {
+                    // `reuse_def` constraints can't be permitted in a Loop instruction because the operand
+                    // index will always be relative to the Loop instruction, not the individual
+                    // instruction in the loop body. However, fixed-nonallocatable registers used with
+                    // instructions that would have emitted `reuse_def` constraints are fine.
+                    assert!(!matches!(
+                        constraint,
+                        regalloc2::OperandConstraint::Reuse(_)
+                    ));
+                    self.0.visit(reg, constraint, kind, pos);
+                }
+
+                fn is_allocatable_preg(&self, reg: regalloc2::PReg) -> bool {
+                    self.0.is_allocatable_preg(reg)
+                }
+
+                fn reg_clobbers(&mut self, regs: PRegSet) {
+                    self.0.reg_clobbers(regs);
+                }
+            }
+
+            #[cfg(debug_assertions)]
+            let collector = &mut NoReuseVisitor(collector);
+
             for inst in body {
                 s390x_get_operands(inst, collector);
             }
-
-            // `reuse_def` constraints can't be permitted in a Loop instruction because the operand
-            // index will always be relative to the Loop instruction, not the individual
-            // instruction in the loop body. However, fixed-nonallocatable registers used with
-            // instructions that would have emitted `reuse_def` constraints are fine.
-            debug_assert!(collector.no_reuse_def());
         }
         Inst::CondBreak { .. } => {}
         Inst::VirtualSPOffsetAdj { .. } => {}
@@ -979,7 +1002,7 @@ impl MachInst for Inst {
     type LabelUse = LabelUse;
     const TRAP_OPCODE: &'static [u8] = &[0, 0];
 
-    fn get_operands<F: Fn(VReg) -> VReg>(&mut self, collector: &mut OperandCollector<'_, F>) {
+    fn get_operands(&mut self, collector: &mut impl OperandVisitor) {
         s390x_get_operands(self, collector);
     }
 
