@@ -990,7 +990,7 @@ impl<'func, I: VCodeInst> Lower<'func, I> {
                 let regs = self.put_value_in_regs(arg);
                 branch_arg_vregs.extend_from_slice(regs.regs());
             }
-            self.vcode.add_succ(succ, &branch_arg_vregs[..]);
+            self.vcode.add_succ(succ, &branch_arg_vregs);
         }
     }
 
@@ -1073,13 +1073,13 @@ impl<'func, I: VCodeInst> Lower<'func, I> {
                 let mut branch_arg_vregs: SmallVec<[Reg; 16]> = smallvec![];
                 for ty in self.f.dfg.block_param_types(orig_succ) {
                     let regs = self.vregs.alloc(ty)?;
-                    for &reg in regs.regs() {
-                        branch_arg_vregs.push(reg);
-                        let vreg = reg.to_virtual_reg().unwrap();
-                        self.vcode.add_block_param(vreg);
-                    }
+                    branch_arg_vregs.extend_from_slice(regs.regs());
                 }
-                self.vcode.add_succ(succ, &branch_arg_vregs[..]);
+                for &reg in &branch_arg_vregs {
+                    let vreg = reg.to_virtual_reg().unwrap();
+                    self.vcode.add_block_param(vreg);
+                }
+                self.vcode.add_succ(succ, &branch_arg_vregs);
 
                 self.emit(I::gen_jump(MachLabel::from_block(succ)));
                 self.finish_ir_inst(Default::default());
