@@ -985,7 +985,8 @@ impl<'a> Parser<'a> {
         let mut specified_target = false;
 
         let mut targets = Vec::new();
-        let flag_builder = settings::builder();
+        let mut flag_builder = settings::builder();
+        flag_builder.set("regalloc_checker", "true").unwrap();
 
         if let Some(targ) = target_pass {
             let loc = self.loc;
