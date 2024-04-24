@@ -4,7 +4,7 @@ use crate::isa::riscv64::lower::isle::generated_code::{
     VecAMode, VecAluOpRImm5, VecAluOpRR, VecAluOpRRImm5, VecAluOpRRR, VecAluOpRRRImm5, VecAvl,
     VecElementWidth, VecLmul, VecMaskMode, VecOpCategory, VecOpMasking, VecTailMode,
 };
-use crate::machinst::RegClass;
+use crate::machinst::{OperandVisitor, RegClass};
 use crate::Reg;
 use core::fmt;
 
@@ -1070,9 +1070,9 @@ impl VecAMode {
         }
     }
 
-    pub fn get_allocatable_register(&self) -> Option<Reg> {
+    pub fn collect(&mut self, collector: &mut impl OperandVisitor) {
         match self {
-            VecAMode::UnitStride { base, .. } => base.get_allocatable_register(),
+            VecAMode::UnitStride { base, .. } => base.collect(collector),
         }
     }
 

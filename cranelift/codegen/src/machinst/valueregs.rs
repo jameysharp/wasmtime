@@ -86,6 +86,11 @@ impl<R: Clone + Copy + Debug + PartialEq + Eq + InvalidSentinel> ValueRegs<R> {
     pub fn regs(&self) -> &[R] {
         &self.parts[0..self.len()]
     }
+
+    pub fn regs_mut(&mut self) -> &mut [R] {
+        let len = self.len();
+        &mut self.parts[0..len]
+    }
 }
 
 impl<R: Clone + Copy + Debug + PartialEq + Eq + InvalidSentinel> ValueRegs<R> {

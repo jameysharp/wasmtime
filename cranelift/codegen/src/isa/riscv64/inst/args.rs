@@ -127,15 +127,15 @@ impl AMode {
 
     /// Returns the registers that known to the register allocator.
     /// Keep this in sync with `with_allocs`.
-    pub(crate) fn get_allocatable_register(&self) -> Option<Reg> {
+    pub(crate) fn collect(&mut self, collector: &mut impl OperandVisitor) {
         match self {
-            AMode::RegOffset(reg, ..) => Some(*reg),
+            AMode::RegOffset(reg, ..) => collector.reg_use(reg),
             AMode::SPOffset(..)
             | AMode::FPOffset(..)
             | AMode::NominalSPOffset(..)
             | AMode::IncomingArg(..)
             | AMode::Const(..)
-            | AMode::Label(..) => None,
+            | AMode::Label(..) => {}
         }
     }
 
