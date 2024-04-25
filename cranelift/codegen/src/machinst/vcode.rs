@@ -316,14 +316,6 @@ impl<I: VCodeInst> VCodeBuilder<I> {
         self.vcode.block_params.push(param.into());
     }
 
-    fn add_branch_args_for_succ(&mut self, args: &[Reg]) {
-        self.vcode
-            .branch_block_args
-            .extend(args.iter().map(|&arg| VReg::from(arg)));
-        let end = self.vcode.branch_block_args.len();
-        self.vcode.branch_block_arg_range.push_end(end);
-    }
-
     /// Push an instruction for the current BB and current IR inst
     /// within the BB.
     pub fn push(&mut self, insn: I, loc: RelSourceLoc) {
@@ -331,10 +323,14 @@ impl<I: VCodeInst> VCodeBuilder<I> {
         self.vcode.srclocs.push(loc);
     }
 
-    /// Add a successor block with branch args.
-    pub fn add_succ(&mut self, block: BlockIndex, args: &[Reg]) {
+    pub fn add_branch_block_arg(&mut self, arg: Reg) {
+        self.vcode.branch_block_args.push(arg.into());
+    }
+
+    pub fn finish_branch_block_args(&mut self, block: regalloc2::Block) {
         self.vcode.block_succs.push(block);
-        self.add_branch_args_for_succ(args);
+        let end = self.vcode.branch_block_args.len();
+        self.vcode.branch_block_arg_range.push_end(end);
     }
 
     /// Add a debug value label to a register.

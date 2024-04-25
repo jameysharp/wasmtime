@@ -969,13 +969,14 @@ impl<'func, I: VCodeInst> Lower<'func, I> {
             let branches = self.f.dfg.insts[inst].branch_destination(&self.f.dfg.jump_tables);
             let branch_args = branches[succ_idx].args_slice(&self.f.dfg.value_lists);
 
-            let mut branch_arg_vregs: SmallVec<[Reg; 16]> = smallvec![];
             for &arg in branch_args {
                 let arg = self.f.dfg.resolve_aliases(arg);
                 let regs = self.put_value_in_regs(arg);
-                branch_arg_vregs.extend_from_slice(regs.regs());
+                for &reg in regs.regs() {
+                    self.vcode.add_branch_block_arg(reg);
+                }
             }
-            self.vcode.add_succ(succ, &branch_arg_vregs[..]);
+            self.vcode.finish_branch_block_args(succ);
         }
     }
 
@@ -1047,16 +1048,15 @@ impl<'func, I: VCodeInst> Lower<'func, I> {
                     .orig_block()
                     .expect("Edge block succ must be body block");
 
-                let mut branch_arg_vregs: SmallVec<[Reg; 16]> = smallvec![];
                 for ty in self.f.dfg.block_param_types(orig_succ) {
                     let regs = self.vregs.alloc(ty)?;
                     for &reg in regs.regs() {
-                        branch_arg_vregs.push(reg);
                         let vreg = reg.to_virtual_reg().unwrap();
                         self.vcode.add_block_param(vreg);
+                        self.vcode.add_branch_block_arg(reg);
                     }
                 }
-                self.vcode.add_succ(succ, &branch_arg_vregs[..]);
+                self.vcode.finish_branch_block_args(succ);
 
                 self.emit(I::gen_jump(MachLabel::from_block(succ)));
                 self.finish_ir_inst(Default::default());
