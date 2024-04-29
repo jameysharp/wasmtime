@@ -1538,6 +1538,11 @@ impl<I: VCodeInst> VRegAllocator<I> {
         // Disallow cycles (see below).
         assert_ne!(resolved_to, from);
 
+        // Currently aliases may change the Cranelift type associated
+        // with a VReg, but it should at least be true that they do
+        // not change the register class.
+        debug_assert_eq!(resolved_to.class(), from.class());
+
         // Maintain the invariant that PCC facts only exist on vregs
         // which aren't aliases. We want to preserve whatever was
         // stated about the vreg before its producer was lowered.
