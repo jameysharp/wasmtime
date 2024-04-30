@@ -432,7 +432,7 @@ impl<I: VCodeInst> VCodeBuilder<I> {
     /// Called once, when a build in Backward order is complete, to
     /// perform the overall reversal (into final forward order) and
     /// finalize metadata accordingly.
-    fn reverse_and_finalize(&mut self, vregs: &VRegAllocator<I>) {
+    fn reverse_and_finalize(&mut self, vregs: &mut VRegAllocator<I>) {
         let n_insts = self.vcode.insts.len();
         if n_insts == 0 {
             return;
@@ -492,7 +492,7 @@ impl<I: VCodeInst> VCodeBuilder<I> {
             .sort_unstable_by_key(|(vreg, _, _, _)| *vreg);
     }
 
-    fn collect_operands(&mut self, vregs: &VRegAllocator<I>) {
+    fn collect_operands(&mut self, vregs: &mut VRegAllocator<I>) {
         let allocatable = PRegSet::from(self.vcode.machine_env());
         for (i, insn) in self.vcode.insts.iter_mut().enumerate() {
             // Push operands from the instruction onto the operand list.
@@ -549,9 +549,9 @@ impl<I: VCodeInst> VCodeBuilder<I> {
         self.vcode.reftyped_vregs = take(&mut vregs.reftyped_vregs);
 
         if self.direction == VCodeBuildDirection::Backward {
-            self.reverse_and_finalize(&vregs);
+            self.reverse_and_finalize(&mut vregs);
         }
-        self.collect_operands(&vregs);
+        self.collect_operands(&mut vregs);
 
         // Apply register aliases to the `reftyped_vregs` list since this list
         // will be returned directly to `regalloc2` eventually and all
@@ -1554,7 +1554,7 @@ impl<I: VCodeInst> VRegAllocator<I> {
         debug_assert_eq!(old_alias, None);
     }
 
-    fn resolve_vreg_alias(&self, mut vreg: regalloc2::VReg) -> regalloc2::VReg {
+    fn resolve_vreg_alias(&mut self, vreg: regalloc2::VReg) -> regalloc2::VReg {
         // We prevent cycles from existing by resolving targets of
         // aliases eagerly before setting them. If the target resolves
         // to the origin of the alias, then a cycle would be created
@@ -1564,10 +1564,21 @@ impl<I: VCodeInst> VRegAllocator<I> {
         // phis/blockparams), cycles should not occur as we use
         // aliases to redirect vregs to the temps that actually define
         // them.
-        while let Some(to) = self.vreg_aliases.get(&vreg) {
-            vreg = *to;
+        let mut len = 0;
+        let mut to = vreg;
+        while let Some(next) = self.vreg_aliases.get(&to) {
+            to = *next;
+            len += 1;
         }
-        vreg
+        if len > 1 {
+            trace!("compressing alias chain of length {len}");
+            let mut cur = vreg;
+            while len > 1 {
+                cur = self.vreg_aliases.insert(cur, to).unwrap();
+                len -= 1;
+            }
+        }
+        to
     }
 
     #[inline]

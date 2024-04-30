@@ -286,7 +286,7 @@ pub type RegClass = regalloc2::RegClass;
 /// gathers operands from a single instruction and provides the range
 /// in the flattened array.
 #[derive(Debug)]
-pub struct OperandCollector<'a, F: Fn(VReg) -> VReg> {
+pub struct OperandCollector<'a, F> {
     operands: &'a mut Vec<Operand>,
     operands_start: usize,
     clobbers: PRegSet,
@@ -297,7 +297,7 @@ pub struct OperandCollector<'a, F: Fn(VReg) -> VReg> {
     renamer: F,
 }
 
-impl<'a, F: Fn(VReg) -> VReg> OperandCollector<'a, F> {
+impl<'a, F> OperandCollector<'a, F> {
     /// Start gathering operands into one flattened operand array.
     pub fn new(operands: &'a mut Vec<Operand>, allocatable: PRegSet, renamer: F) -> Self {
         let operands_start = operands.len();
@@ -435,7 +435,7 @@ pub trait OperandVisitorImpl: OperandVisitor {
 
 impl<T: OperandVisitor> OperandVisitorImpl for T {}
 
-impl<'a, F: Fn(VReg) -> VReg> OperandVisitor for OperandCollector<'a, F> {
+impl<'a, F: FnMut(VReg) -> VReg> OperandVisitor for OperandCollector<'a, F> {
     fn add_operand(
         &mut self,
         reg: &mut Reg,
