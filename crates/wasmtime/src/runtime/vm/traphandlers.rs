@@ -482,7 +482,14 @@ impl CallThreadState {
             return TrapTest::NotWasm;
         };
 
-        let Some(trap) = code.lookup_trap_code(text_offset) else {
+        let stack_overflow_trap = if let Some(faulting_address) = faulting_addr {
+            (regs.sp - 128 <= faulting_address && faulting_address <= regs.sp + 4096)
+                .then_some(wasmtime_environ::Trap::StackOverflow)
+        } else {
+            None
+        };
+
+        let Some(trap) = stack_overflow_trap.or_else(|| code.lookup_trap_code(text_offset)) else {
             return TrapTest::NotWasm;
         };
 
