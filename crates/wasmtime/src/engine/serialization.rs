@@ -348,6 +348,7 @@ impl Metadata<'_> {
             epoch_interruption,
             static_memory_bound_is_maximum,
             guard_before_linear_memory,
+            table_lazy_init,
             relaxed_simd_deterministic,
             tail_callable,
             winch_callable,
@@ -406,6 +407,7 @@ impl Metadata<'_> {
             other.guard_before_linear_memory,
             "guard before linear memory",
         )?;
+        Self::check_bool(table_lazy_init, other.table_lazy_init, "table lazy init")?;
         Self::check_bool(
             relaxed_simd_deterministic,
             other.relaxed_simd_deterministic,

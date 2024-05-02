@@ -11,7 +11,7 @@ use sptr::Strict;
 use std::ops::Range;
 use std::ptr::{self, NonNull};
 use wasmtime_environ::{
-    TablePlan, Trap, WasmHeapTopType, WasmRefType, FUNCREF_INIT_BIT, FUNCREF_MASK,
+    TablePlan, TableStyle, Trap, WasmHeapTopType, WasmRefType, FUNCREF_INIT_BIT, FUNCREF_MASK,
 };
 
 /// An element going into or coming out of a table.
@@ -110,18 +110,24 @@ impl TaggedFuncRef {
 
     /// Converts the given `ptr`, a valid funcref pointer, into a tagged pointer
     /// by adding in the `FUNCREF_INIT_BIT`.
-    fn from(ptr: *mut VMFuncRef) -> Self {
-        let masked = Strict::map_addr(ptr, |a| a | FUNCREF_INIT_BIT);
-        TaggedFuncRef(masked)
+    fn from(ptr: *mut VMFuncRef, lazy_init: bool) -> Self {
+        if lazy_init {
+            let masked = Strict::map_addr(ptr, |a| a | FUNCREF_INIT_BIT);
+            TaggedFuncRef(masked)
+        } else {
+            TaggedFuncRef(ptr)
+        }
     }
 
     /// Converts a tagged pointer into a `TableElement`, returning `UninitFunc`
     /// for null (not a tagged value) or `FuncRef` for otherwise tagged values.
-    fn into_table_element(self) -> TableElement {
+    fn into_table_element(self, lazy_init: bool) -> TableElement {
         let ptr = self.0;
-        if ptr.is_null() {
+        if lazy_init && ptr.is_null() {
             TableElement::UninitFunc
         } else {
+            // Masking off the tag bit is harmless whether the table uses lazy
+            // init or not.
             let unmasked = Strict::map_addr(ptr, |a| a & FUNCREF_MASK);
             TableElement::FuncRef(unmasked)
         }
@@ -153,6 +159,8 @@ pub struct StaticFuncTable {
     data: SendSyncPtr<[FuncTableElem]>,
     /// The current size of the table.
     size: u32,
+    /// Whether elements of this table are initialized lazily.
+    lazy_init: bool,
 }
 
 pub struct StaticGcRefTable {
@@ -186,6 +194,8 @@ pub struct DynamicFuncTable {
     elements: Vec<FuncTableElem>,
     /// Maximum size that `elements` can grow to.
     maximum: Option<u32>,
+    /// Whether elements of this table are initialized lazily.
+    lazy_init: bool,
 }
 
 pub struct DynamicGcRefTable {
@@ -257,10 +267,12 @@ impl Table {
     /// Create a new dynamic (movable) table instance for the specified table plan.
     pub fn new_dynamic(plan: &TablePlan, store: &mut dyn Store) -> Result<Self> {
         Self::limit_new(plan, store)?;
+        let TableStyle::CallerChecksSignature { lazy_init } = plan.style;
         match wasm_to_table_type(plan.table.wasm_ty) {
             TableElementType::Func => Ok(Self::from(DynamicFuncTable {
                 elements: vec![None; usize::try_from(plan.table.minimum).unwrap()],
                 maximum: plan.table.maximum,
+                lazy_init,
             })),
             TableElementType::GcRef => Ok(Self::from(DynamicGcRefTable {
                 elements: (0..usize::try_from(plan.table.minimum).unwrap())
@@ -304,7 +316,12 @@ impl Table {
                     data.as_non_null().cast::<FuncTableElem>(),
                     std::cmp::min(len, max),
                 ));
-                Ok(Self::from(StaticFuncTable { data, size }))
+                let TableStyle::CallerChecksSignature { lazy_init } = plan.style;
+                Ok(Self::from(StaticFuncTable {
+                    data,
+                    size,
+                    lazy_init,
+                }))
             }
             TableElementType::GcRef => {
                 let len = {
@@ -402,14 +419,14 @@ impl Table {
     ) -> Result<(), Trap> {
         let dst = usize::try_from(dst).map_err(|_| Trap::TableOutOfBounds)?;
 
-        let elements = self
-            .funcrefs_mut()
+        let (funcrefs, lazy_init) = self.funcrefs_mut();
+        let elements = funcrefs
             .get_mut(dst..)
             .and_then(|s| s.get_mut(..items.len()))
             .ok_or(Trap::TableOutOfBounds)?;
 
         for (item, slot) in items.zip(elements) {
-            *slot = TaggedFuncRef::from(item);
+            *slot = TaggedFuncRef::from(item, lazy_init);
         }
         Ok(())
     }
@@ -461,7 +478,8 @@ impl Table {
 
         match val {
             TableElement::FuncRef(f) => {
-                self.funcrefs_mut()[start..end].fill(TaggedFuncRef::from(f));
+                let (funcrefs, lazy_init) = self.funcrefs_mut();
+                funcrefs[start..end].fill(TaggedFuncRef::from(f, lazy_init));
             }
             TableElement::GcRef(r) => {
                 // Clone the init GC reference into each table slot.
@@ -476,7 +494,8 @@ impl Table {
                 }
             }
             TableElement::UninitFunc => {
-                self.funcrefs_mut()[start..end].fill(TaggedFuncRef::UNINIT);
+                let (funcrefs, _lazy_init) = self.funcrefs_mut();
+                funcrefs[start..end].fill(TaggedFuncRef::UNINIT);
             }
         }
 
@@ -543,7 +562,7 @@ impl Table {
 
         // First resize the storage and then fill with the init value
         match self {
-            Table::Static(StaticTable::Func(StaticFuncTable { data, size })) => {
+            Table::Static(StaticTable::Func(StaticFuncTable { data, size, .. })) => {
                 unsafe {
                     debug_assert!(data.as_ref()[*size as usize..new_size as usize]
                         .iter()
@@ -587,11 +606,13 @@ impl Table {
     pub fn get(&self, gc_store: &mut GcStore, index: u32) -> Option<TableElement> {
         let index = usize::try_from(index).ok()?;
         match self.element_type() {
-            TableElementType::Func => self
-                .funcrefs()
-                .get(index)
-                .copied()
-                .map(|e| e.into_table_element()),
+            TableElementType::Func => {
+                let (funcrefs, lazy_init) = self.funcrefs();
+                funcrefs
+                    .get(index)
+                    .copied()
+                    .map(|e| e.into_table_element(lazy_init))
+            }
             TableElementType::GcRef => self.gc_refs().get(index).map(|r| {
                 let r = r.as_ref().map(|r| gc_store.clone_gc_ref(r));
                 TableElement::GcRef(r)
@@ -613,10 +634,12 @@ impl Table {
         let index = usize::try_from(index).map_err(|_| ())?;
         match elem {
             TableElement::FuncRef(f) => {
-                *self.funcrefs_mut().get_mut(index).ok_or(())? = TaggedFuncRef::from(f);
+                let (funcrefs, lazy_init) = self.funcrefs_mut();
+                *funcrefs.get_mut(index).ok_or(())? = TaggedFuncRef::from(f, lazy_init);
             }
             TableElement::UninitFunc => {
-                *self.funcrefs_mut().get_mut(index).ok_or(())? = TaggedFuncRef::UNINIT;
+                let (funcrefs, _lazy_init) = self.funcrefs_mut();
+                *funcrefs.get_mut(index).ok_or(())? = TaggedFuncRef::UNINIT;
             }
             TableElement::GcRef(e) => {
                 *self.gc_refs_mut().get_mut(index).ok_or(())? = e;
@@ -672,10 +695,12 @@ impl Table {
     /// Return a `VMTableDefinition` for exposing the table to compiled wasm code.
     pub fn vmtable(&mut self) -> VMTableDefinition {
         match self {
-            Table::Static(StaticTable::Func(StaticFuncTable { data, size })) => VMTableDefinition {
-                base: data.as_ptr().cast(),
-                current_elements: *size,
-            },
+            Table::Static(StaticTable::Func(StaticFuncTable { data, size, .. })) => {
+                VMTableDefinition {
+                    base: data.as_ptr().cast(),
+                    current_elements: *size,
+                }
+            }
             Table::Static(StaticTable::GcRef(StaticGcRefTable { data, size })) => {
                 VMTableDefinition {
                     base: data.as_ptr().cast(),
@@ -701,29 +726,60 @@ impl Table {
         self.element_type().matches(val)
     }
 
-    fn funcrefs(&self) -> &[TaggedFuncRef] {
+    fn funcrefs(&self) -> (&[TaggedFuncRef], bool) {
         assert_eq!(self.element_type(), TableElementType::Func);
         match self {
-            Self::Dynamic(DynamicTable::Func(DynamicFuncTable { elements, .. })) => unsafe {
-                std::slice::from_raw_parts(elements.as_ptr().cast(), elements.len())
+            Self::Dynamic(DynamicTable::Func(DynamicFuncTable {
+                elements,
+                lazy_init,
+                ..
+            })) => unsafe {
+                (
+                    std::slice::from_raw_parts(elements.as_ptr().cast(), elements.len()),
+                    *lazy_init,
+                )
             },
-            Self::Static(StaticTable::Func(StaticFuncTable { data, size })) => unsafe {
-                std::slice::from_raw_parts(data.as_ptr().cast(), usize::try_from(*size).unwrap())
+            Self::Static(StaticTable::Func(StaticFuncTable {
+                data,
+                size,
+                lazy_init,
+            })) => unsafe {
+                (
+                    std::slice::from_raw_parts(
+                        data.as_ptr().cast(),
+                        usize::try_from(*size).unwrap(),
+                    ),
+                    *lazy_init,
+                )
             },
             _ => unreachable!(),
         }
     }
 
-    fn funcrefs_mut(&mut self) -> &mut [TaggedFuncRef] {
+    fn funcrefs_mut(&mut self) -> (&mut [TaggedFuncRef], bool) {
         assert_eq!(self.element_type(), TableElementType::Func);
         match self {
-            Self::Dynamic(DynamicTable::Func(DynamicFuncTable { elements, .. })) => unsafe {
-                std::slice::from_raw_parts_mut(elements.as_mut_ptr().cast(), elements.len())
+            Self::Dynamic(DynamicTable::Func(DynamicFuncTable {
+                elements,
+                lazy_init,
+                ..
+            })) => unsafe {
+                (
+                    std::slice::from_raw_parts_mut(elements.as_mut_ptr().cast(), elements.len()),
+                    *lazy_init,
+                )
             },
-            Self::Static(StaticTable::Func(StaticFuncTable { data, size })) => unsafe {
-                std::slice::from_raw_parts_mut(
-                    data.as_ptr().cast(),
-                    usize::try_from(*size).unwrap(),
+            Self::Static(StaticTable::Func(StaticFuncTable {
+                data,
+                size,
+                lazy_init,
+            })) => unsafe {
+                (
+                    std::slice::from_raw_parts_mut(
+                        data.as_ptr().cast(),
+                        usize::try_from(*size).unwrap(),
+                    ),
+                    *lazy_init,
                 )
             },
             _ => unreachable!(),
@@ -770,8 +826,9 @@ impl Table {
         match ty {
             TableElementType::Func => {
                 // `funcref` are `Copy`, so just do a mempcy
-                dst_table.funcrefs_mut()[dst_range]
-                    .copy_from_slice(&src_table.funcrefs()[src_range]);
+                let (dst_funcrefs, _lazy_init) = dst_table.funcrefs_mut();
+                let (src_funcrefs, _lazy_init) = src_table.funcrefs();
+                dst_funcrefs[dst_range].copy_from_slice(&src_funcrefs[src_range]);
             }
             TableElementType::GcRef => {
                 assert_eq!(
@@ -810,7 +867,8 @@ impl Table {
         match ty {
             TableElementType::Func => {
                 // `funcref` are `Copy`, so just do a memmove
-                self.funcrefs_mut().copy_within(src_range, dst_range.start);
+                let (funcrefs, _lazy_init) = self.funcrefs_mut();
+                funcrefs.copy_within(src_range, dst_range.start);
             }
             TableElementType::GcRef => {
                 // We need to clone each `externref` while handling overlapping
@@ -842,6 +900,7 @@ impl Default for Table {
         Self::from(StaticFuncTable {
             data: SendSyncPtr::new(NonNull::from(&mut [])),
             size: 0,
+            lazy_init: false,
         })
     }
 }
