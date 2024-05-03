@@ -1,4 +1,4 @@
-use crate::runtime::vm::const_expr::{ConstEvalContext, ConstExprEvaluator};
+use crate::runtime::vm::const_expr::ConstExprEvaluator;
 use crate::runtime::vm::imports::Imports;
 use crate::runtime::vm::instance::{Instance, InstanceHandle};
 use crate::runtime::vm::memory::Memory;
@@ -530,10 +530,9 @@ fn check_table_init_bounds(instance: &mut Instance, module: &Module) -> Result<(
 
     for segment in module.table_initialization.segments.iter() {
         let table = unsafe { &*instance.get_table(segment.table_index) };
-        let mut context = ConstEvalContext::new(instance, module);
         let start = unsafe {
             const_evaluator
-                .eval(&mut context, &segment.offset)
+                .eval(instance, &segment.offset)
                 .expect("const expression should be valid")
         };
         let start = usize::try_from(start.get_u32()).unwrap();
@@ -561,10 +560,9 @@ fn initialize_tables(instance: &mut Instance, module: &Module) -> Result<()> {
             TableInitialValue::Null { precomputed: _ } => {}
 
             TableInitialValue::Expr(expr) => {
-                let mut context = ConstEvalContext::new(instance, module);
                 let raw = unsafe {
                     const_evaluator
-                        .eval(&mut context, expr)
+                        .eval(instance, expr)
                         .expect("const expression should be valid")
                 };
                 let idx = module.table_index(table);
@@ -604,10 +602,9 @@ fn initialize_tables(instance: &mut Instance, module: &Module) -> Result<()> {
     // iterates over all segments (Segments mode) or leftover
     // segments (FuncTable mode) to initialize.
     for segment in module.table_initialization.segments.iter() {
-        let mut context = ConstEvalContext::new(instance, module);
         let start = unsafe {
             const_evaluator
-                .eval(&mut context, &segment.offset)
+                .eval(instance, &segment.offset)
                 .expect("const expression should be valid")
         };
         instance.table_init_segment(

@@ -2,7 +2,7 @@
 //! wasm module (except its callstack and register state). An
 //! `InstanceHandle` is a reference-counting handle for an `Instance`.
 
-use crate::runtime::vm::const_expr::{ConstEvalContext, ConstExprEvaluator};
+use crate::runtime::vm::const_expr::ConstExprEvaluator;
 use crate::runtime::vm::export::Export;
 use crate::runtime::vm::memory::{Memory, RuntimeMemoryCreator};
 use crate::runtime::vm::table::{Table, TableElement, TableElementType};
@@ -867,7 +867,6 @@ impl Instance {
                     .get(src..)
                     .and_then(|s| s.get(..len))
                     .ok_or(Trap::TableOutOfBounds)?;
-                let mut context = ConstEvalContext::new(self, &module);
                 match module.table_plans[table_index]
                     .table
                     .wasm_ty
@@ -878,7 +877,7 @@ impl Instance {
                         dst,
                         exprs.iter().map(|expr| unsafe {
                             let raw = const_evaluator
-                                .eval(&mut context, expr)
+                                .eval(self, expr)
                                 .expect("const expr should be valid");
                             VMGcRef::from_raw_u32(raw.get_externref())
                         }),
@@ -887,7 +886,7 @@ impl Instance {
                         dst,
                         exprs.iter().map(|expr| unsafe {
                             let raw = const_evaluator
-                                .eval(&mut context, expr)
+                                .eval(self, expr)
                                 .expect("const expr should be valid");
                             VMGcRef::from_raw_u32(raw.get_anyref())
                         }),
@@ -896,7 +895,7 @@ impl Instance {
                         dst,
                         exprs.iter().map(|expr| unsafe {
                             const_evaluator
-                                .eval(&mut context, expr)
+                                .eval(self, expr)
                                 .expect("const expr should be valid")
                                 .get_funcref()
                                 .cast()
@@ -1267,9 +1266,8 @@ impl Instance {
         module: &Module,
     ) {
         for (index, init) in module.global_initializers.iter() {
-            let mut context = ConstEvalContext::new(self, module);
             let raw = const_evaluator
-                .eval(&mut context, init)
+                .eval(self, init)
                 .expect("should be a valid const expr");
 
             let to = self.global_ptr(index);

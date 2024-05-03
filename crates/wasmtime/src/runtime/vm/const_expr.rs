@@ -3,7 +3,7 @@
 use crate::runtime::vm::{Instance, VMGcRef, ValRaw, I31};
 use anyhow::{anyhow, bail, Result};
 use smallvec::SmallVec;
-use wasmtime_environ::{ConstExpr, FuncIndex, GlobalIndex, Module};
+use wasmtime_environ::{ConstExpr, FuncIndex, GlobalIndex};
 
 /// An interpreter for const expressions.
 ///
@@ -15,33 +15,32 @@ pub struct ConstExprEvaluator {
 }
 
 /// The context within which a particular const expression is evaluated.
-pub struct ConstEvalContext<'a, 'b> {
-    instance: &'a mut Instance,
-    module: &'b Module,
+pub trait ConstEvalContext {
+    fn global_get(&mut self, index: GlobalIndex) -> Result<ValRaw>;
+    fn ref_func(&mut self, index: FuncIndex) -> Result<ValRaw>;
 }
 
-impl<'a, 'b> ConstEvalContext<'a, 'b> {
-    /// Create a new context.
-    pub fn new(instance: &'a mut Instance, module: &'b Module) -> Self {
-        Self { instance, module }
+impl ConstEvalContext for () {
+    fn global_get(&mut self, _index: GlobalIndex) -> Result<ValRaw> {
+        Err(anyhow!("can't evaluate global.get without an instance"))
     }
 
+    fn ref_func(&mut self, _index: FuncIndex) -> Result<ValRaw> {
+        Err(anyhow!("can't evaluate ref.func without an instance"))
+    }
+}
+
+impl ConstEvalContext for Instance {
     fn global_get(&mut self, index: GlobalIndex) -> Result<ValRaw> {
         unsafe {
-            let gc_store = (*self.instance.store()).gc_store();
-            let global = self
-                .instance
-                .defined_or_imported_global_ptr(index)
-                .as_ref()
-                .unwrap();
-            Ok(global.to_val_raw(gc_store, self.module.globals[index].wasm_ty))
+            let gc_store = (*self.store()).gc_store();
+            let global = self.defined_or_imported_global_ptr(index).as_ref().unwrap();
+            Ok(global.to_val_raw(gc_store, self.module().globals[index].wasm_ty))
         }
     }
 
     fn ref_func(&mut self, index: FuncIndex) -> Result<ValRaw> {
-        Ok(ValRaw::funcref(
-            self.instance.get_func_ref(index).unwrap().cast(),
-        ))
+        Ok(ValRaw::funcref(self.get_func_ref(index).unwrap().cast()))
     }
 }
 
@@ -57,7 +56,7 @@ impl ConstExprEvaluator {
     /// the correct type.
     pub unsafe fn eval(
         &mut self,
-        context: &mut ConstEvalContext<'_, '_>,
+        context: &mut impl ConstEvalContext,
         expr: &ConstExpr,
     ) -> Result<ValRaw> {
         self.stack.clear();
