@@ -728,62 +728,56 @@ impl Table {
 
     fn funcrefs(&self) -> (&[TaggedFuncRef], bool) {
         assert_eq!(self.element_type(), TableElementType::Func);
-        match self {
+        let (data, lazy_init) = match self {
             Self::Dynamic(DynamicTable::Func(DynamicFuncTable {
                 elements,
                 lazy_init,
                 ..
-            })) => unsafe {
-                (
-                    std::slice::from_raw_parts(elements.as_ptr().cast(), elements.len()),
-                    *lazy_init,
-                )
-            },
+            })) => (elements.as_slice(), *lazy_init),
             Self::Static(StaticTable::Func(StaticFuncTable {
                 data,
                 size,
                 lazy_init,
             })) => unsafe {
                 (
-                    std::slice::from_raw_parts(
-                        data.as_ptr().cast(),
-                        usize::try_from(*size).unwrap(),
-                    ),
+                    &data.as_ref()[..usize::try_from(*size).unwrap()],
                     *lazy_init,
                 )
             },
             _ => unreachable!(),
-        }
+        };
+
+        (
+            unsafe { core::slice::from_raw_parts(data.as_ptr().cast(), data.len()) },
+            lazy_init,
+        )
     }
 
     fn funcrefs_mut(&mut self) -> (&mut [TaggedFuncRef], bool) {
         assert_eq!(self.element_type(), TableElementType::Func);
-        match self {
+        let (data, lazy_init) = match self {
             Self::Dynamic(DynamicTable::Func(DynamicFuncTable {
                 elements,
                 lazy_init,
                 ..
-            })) => unsafe {
-                (
-                    std::slice::from_raw_parts_mut(elements.as_mut_ptr().cast(), elements.len()),
-                    *lazy_init,
-                )
-            },
+            })) => (elements.as_mut_slice(), *lazy_init),
             Self::Static(StaticTable::Func(StaticFuncTable {
                 data,
                 size,
                 lazy_init,
             })) => unsafe {
                 (
-                    std::slice::from_raw_parts_mut(
-                        data.as_ptr().cast(),
-                        usize::try_from(*size).unwrap(),
-                    ),
+                    &mut data.as_mut()[..usize::try_from(*size).unwrap()],
                     *lazy_init,
                 )
             },
             _ => unreachable!(),
-        }
+        };
+
+        (
+            unsafe { core::slice::from_raw_parts_mut(data.as_mut_ptr().cast(), data.len()) },
+            lazy_init,
+        )
     }
 
     fn gc_refs(&self) -> &[Option<VMGcRef>] {
