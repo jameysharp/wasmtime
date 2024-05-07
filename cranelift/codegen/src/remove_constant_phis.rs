@@ -2,12 +2,12 @@
 
 use crate::dominator_tree::DominatorTree;
 use crate::ir;
-use crate::ir::Function;
-use crate::ir::{Block, BlockCall, Inst, Value};
+use crate::ir::{Block, BlockCall, Function, Inst, Value};
 use crate::timing;
 use bumpalo::Bump;
+use cranelift_entity::packed_option::ReservedValue;
 use cranelift_entity::SecondaryMap;
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 
 // A note on notation.  For the sake of clarity, this file uses the phrase
@@ -106,8 +106,6 @@ impl AbstractValue {
 
 #[derive(Clone, Copy, Debug)]
 struct OutEdge<'a> {
-    /// An instruction that transfers control.
-    inst: Inst,
     /// The index into branch_destinations for this instruction that corresponds
     /// to this edge.
     branch_index: u32,
@@ -128,7 +126,6 @@ impl<'a> OutEdge<'a> {
     fn new(
         bump: &'a Bump,
         dfg: &ir::DataFlowGraph,
-        inst: Inst,
         branch_index: usize,
         block: BlockCall,
     ) -> Option<Self> {
@@ -140,7 +137,6 @@ impl<'a> OutEdge<'a> {
         }
 
         Some(OutEdge {
-            inst,
             branch_index: branch_index as u32,
             block: block.block(&dfg.value_lists),
             args: bump.alloc_slice_fill_iter(
@@ -157,12 +153,18 @@ impl<'a> OutEdge<'a> {
 /// `summaries` below.  For the `SmallVec` tuning params: most blocks have
 /// few parameters, hence `4`.  And almost all blocks have either one or two
 /// successors, hence `2`.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 struct BlockSummary<'a> {
     /// Formal parameters for this `Block`.
     ///
     /// These values are from group A.
     formals: &'a [Value],
+
+    /// Indicates whether at least one of the formal parameters has been
+    /// removed.
+    needs_editing: bool,
+
+    inst: Inst,
 
     /// Each outgoing edge from this block.
     ///
@@ -175,13 +177,13 @@ struct BlockSummary<'a> {
     dests: SmallVec<[OutEdge<'a>; 2]>,
 }
 
-impl<'a> BlockSummary<'a> {
-    /// Construct a new `BlockSummary`, using `values` as its backing storage.
-    #[inline]
-    fn new(bump: &'a Bump, formals: &[Value]) -> Self {
-        Self {
-            formals: bump.alloc_slice_copy(formals),
-            dests: Default::default(),
+impl Default for BlockSummary<'_> {
+    fn default() -> Self {
+        BlockSummary {
+            formals: &[],
+            needs_editing: false,
+            inst: Inst::reserved_value(),
+            dests: SmallVec::new(),
         }
     }
 }
@@ -232,54 +234,48 @@ pub fn do_remove_constant_phis(func: &mut Function, domtree: &mut DominatorTree)
         Bump::with_capacity(domtree.cfg_postorder().len() * 4 * std::mem::size_of::<Value>());
     let mut summaries =
         SecondaryMap::<Block, BlockSummary>::with_capacity(domtree.cfg_postorder().len());
-
-    for b in domtree.cfg_postorder().iter().rev().copied() {
-        let formals = func.dfg.block_params(b);
-        let mut summary = BlockSummary::new(&bump, formals);
-
-        for inst in func.layout.block_insts(b) {
-            for (ix, dest) in func.dfg.insts[inst]
-                .branch_destination(&func.dfg.jump_tables)
-                .iter()
-                .enumerate()
-            {
-                if let Some(edge) = OutEdge::new(&bump, &func.dfg, inst, ix, *dest) {
-                    summary.dests.push(edge);
-                }
-            }
-        }
-
-        // Ensure the invariant that all blocks (except for the entry) appear
-        // in the summary, *unless* they have neither formals nor any
-        // param-carrying branches/jumps.
-        if formals.len() > 0 || summary.dests.len() > 0 {
-            summaries[b] = summary;
-        }
-    }
-
-    // Phase 2 of 3: iterate over the summaries in reverse postorder,
-    // computing new `AbstractValue`s for each tracked `Value`.  The set of
-    // tracked `Value`s is exactly Group A as described above.
+    let mut state = SolverState::new();
 
     let entry_block = func
         .layout
         .entry_block()
         .expect("remove_constant_phis: entry block unknown");
 
-    // Set up initial solver state
-    let mut state = SolverState::new();
+    for &b in domtree.cfg_postorder().iter().rev() {
+        let inst = func.layout.last_inst(b).unwrap();
+        let dests: SmallVec<_> = func.dfg.insts[inst]
+            .branch_destination(&func.dfg.jump_tables)
+            .iter()
+            .enumerate()
+            .filter_map(|(ix, &dest)| OutEdge::new(&bump, &func.dfg, ix, dest))
+            .collect();
 
-    for b in domtree.cfg_postorder().iter().rev().copied() {
-        // For each block, get the formals
-        if b == entry_block {
-            continue;
-        }
-        let formals = func.dfg.block_params(b);
-        for formal in formals {
-            let mb_old_absval = state.absvals.insert(*formal, AbstractValue::None);
-            assert!(mb_old_absval.is_none());
+        let formals = if b == entry_block {
+            &[]
+        } else {
+            func.dfg.block_params(b)
+        };
+
+        // Ensure the invariant that all blocks (except for the entry) appear
+        // in the summary, *unless* they have neither formals nor any
+        // param-carrying branches/jumps.
+        if formals.len() > 0 || dests.len() > 0 {
+            summaries[b] = BlockSummary {
+                formals: bump.alloc_slice_copy(formals),
+                needs_editing: false,
+                inst,
+                dests,
+            };
+            for &formal in formals {
+                let mb_old_absval = state.absvals.insert(formal, AbstractValue::None);
+                assert!(mb_old_absval.is_none());
+            }
         }
     }
+
+    // Phase 2 of 3: iterate over the summaries in reverse postorder,
+    // computing new `AbstractValue`s for each tracked `Value`.  The set of
+    // tracked `Value`s is exactly Group A as described above.
 
     // Solve: repeatedly traverse the blocks in reverse postorder, until there
     // are no changes.
@@ -326,87 +322,69 @@ pub fn do_remove_constant_phis(func: &mut Function, domtree: &mut DominatorTree)
         }
     }
 
-    let mut n_consts = 0;
-    for absval in state.absvals.values() {
-        if absval.is_one() {
-            n_consts += 1;
-        }
-    }
+    // No more mutating state after this
+    let state = state;
 
     // Phase 3 of 3: edit the function to remove constant formals, using the
     // summaries and the final solver state as a guide.
 
-    // Make up a set of blocks that need editing.
-    let mut need_editing = FxHashSet::<Block>::default();
-    for (block, summary) in summaries.iter() {
-        if block == entry_block {
-            continue;
-        }
-        for formal in summary.formals {
-            let formal_absval = state.get(*formal);
-            if formal_absval.is_one() {
-                need_editing.insert(block);
-                break;
-            }
-        }
-    }
-
     // Firstly, deal with the formals.  For each formal which is redundant,
     // remove it, and also add a reroute from it to the constant value which
-    // it we know it to be.
-    for b in &need_editing {
-        let mut del_these = SmallVec::<[(Value, Value); 32]>::new();
-        let formals: &[Value] = func.dfg.block_params(*b);
-        for formal in formals {
-            // The state must give an absval for `formal`.
-            if let AbstractValue::One(replacement_val) = state.get(*formal) {
-                del_these.push((*formal, replacement_val));
-            }
-        }
+    // we know it to be.
+    for summary in summaries.values_mut() {
         // We can delete the formals in any order.  However,
         // `remove_block_param` works by sliding backwards all arguments to
         // the right of the value it is asked to delete.  Hence when removing more
         // than one formal, it is significantly more efficient to ask it to
         // remove the rightmost formal first, and hence this `rev()`.
-        for (redundant_formal, replacement_val) in del_these.into_iter().rev() {
-            func.dfg.remove_block_param(redundant_formal);
-            func.dfg.change_to_alias(redundant_formal, replacement_val);
+        for &formal in summary.formals.iter().rev() {
+            // The state must give an absval for `formal`.
+            if let AbstractValue::One(replacement_val) = state.get(formal) {
+                func.dfg.remove_block_param(formal);
+                func.dfg.change_to_alias(formal, replacement_val);
+                summary.needs_editing = true;
+            }
         }
     }
 
     // Secondly, visit all branch insns.  If the destination has had its
     // formals changed, change the actuals accordingly.  Don't scan all insns,
     // rather just visit those as listed in the summaries we prepared earlier.
-    let mut old_actuals = alloc::vec::Vec::new();
+    let dfg = &mut func.dfg;
+    let mut actuals = alloc::vec::Vec::new();
     for summary in summaries.values() {
+        if summary.dests.is_empty() {
+            continue;
+        }
+        let dests = dfg.insts[summary.inst].branch_destination_mut(&mut dfg.jump_tables);
         for edge in &summary.dests {
-            if !need_editing.contains(&edge.block) {
+            let block = &mut dests[edge.branch_index as usize];
+            let destination = block.block(&dfg.value_lists);
+
+            let dst_summary = &summaries[destination];
+            if !dst_summary.needs_editing {
                 continue;
             }
 
-            let dfg = &mut func.dfg;
-            let dests = dfg.insts[edge.inst].branch_destination_mut(&mut dfg.jump_tables);
-            let block = &mut dests[edge.branch_index as usize];
-
-            old_actuals.extend(block.args_slice(&dfg.value_lists));
-
             // Check that the numbers of arguments make sense.
-            let formals = &summaries[edge.block].formals;
-            assert_eq!(formals.len(), old_actuals.len());
+            let old = block.args_slice(&dfg.value_lists);
+            assert_eq!(dst_summary.formals.len(), old.len());
 
             // Filter out redundant block arguments.
-            let mut formals = formals.iter();
-            old_actuals.retain(|_| {
-                let formal_i = formals.next().unwrap();
-                !state.get(*formal_i).is_one()
-            });
+            actuals.extend(
+                old.iter()
+                    .zip(dst_summary.formals)
+                    .filter_map(|(&actual, &formal)| match state.get(formal) {
+                        AbstractValue::One(_) => None,
+                        _ => Some(actual),
+                    }),
+            );
 
             // Replace the block with a new one that only includes the non-redundant arguments.
             // This leaks the value list from the old block,
             // https://github.com/bytecodealliance/wasmtime/issues/5451 for more information.
-            let destination = block.block(&dfg.value_lists);
-            *block = BlockCall::new(destination, &old_actuals, &mut dfg.value_lists);
-            old_actuals.clear();
+            *block = BlockCall::new(destination, &actuals, &mut dfg.value_lists);
+            actuals.clear();
         }
     }
 
@@ -414,6 +392,10 @@ pub fn do_remove_constant_phis(func: &mut Function, domtree: &mut DominatorTree)
         "do_remove_constant_phis: done, {} iters.   {} formals, of which {} const.",
         iter_no,
         state.absvals.len(),
-        n_consts
+        state
+            .absvals
+            .values()
+            .filter(|absval| absval.is_one())
+            .count(),
     );
 }
