@@ -950,33 +950,46 @@ impl<'func, I: VCodeInst> Lower<'func, I> {
         let loc = self.srcloc(branch);
         self.finish_ir_inst(loc);
         // Add block param outputs for current block.
-        self.lower_branch_blockparam_args(bindex);
+        match self.vcode.block_order().succ_indices(bindex).1 {
+            &[succ] => self.lower_branch_blockparam_args(branch, 0, succ),
+            succs => {
+                // If there are multiple edges, either the destination has
+                // multiple predecessors and there is a split critical edge
+                // block that can hold these block params, or it has one
+                // predecessor and doesn't need block params.
+                debug_assert!(succs
+                    .iter()
+                    .zip(self.f.dfg.insts[branch].branch_destination(&self.f.dfg.jump_tables))
+                    .all(|(succ, block_call)| {
+                        matches!(
+                            self.vcode.block_order().lowered_order()[succ.index()],
+                            LoweredBlock::CriticalEdge { .. }
+                        ) || block_call.args_slice(&self.f.dfg.value_lists).is_empty()
+                    }));
+                let succs: SmallVec<[BlockIndex; 2]> = SmallVec::from_slice(succs);
+                for succ in succs {
+                    self.vcode.add_succ(succ, &[]);
+                }
+            }
+        }
         Ok(())
     }
 
-    fn lower_branch_blockparam_args(&mut self, block: BlockIndex) {
-        // TODO: why not make `block_order` public?
-        for succ_idx in 0..self.vcode.block_order().succ_indices(block).1.len() {
-            // Avoid immutable borrow by explicitly indexing.
-            let (opt_inst, succs) = self.vcode.block_order().succ_indices(block);
-            let inst = opt_inst.expect("lower_branch_blockparam_args called on a critical edge!");
-            let succ = succs[succ_idx];
+    fn lower_branch_blockparam_args(&mut self, inst: Inst, succ_idx: usize, succ: BlockIndex) {
+        // The use of `succ_idx` to index `branch_destination` is valid on the assumption that
+        // the traversal order defined in `visit_block_succs` mirrors the order returned by
+        // `branch_destination`. If that assumption is violated, the branch targets returned
+        // here will not match the clif.
+        let branches = self.f.dfg.insts[inst].branch_destination(&self.f.dfg.jump_tables);
+        let branch_args = branches[succ_idx].args_slice(&self.f.dfg.value_lists);
 
-            // The use of `succ_idx` to index `branch_destination` is valid on the assumption that
-            // the traversal order defined in `visit_block_succs` mirrors the order returned by
-            // `branch_destination`. If that assumption is violated, the branch targets returned
-            // here will not match the clif.
-            let branches = self.f.dfg.insts[inst].branch_destination(&self.f.dfg.jump_tables);
-            let branch_args = branches[succ_idx].args_slice(&self.f.dfg.value_lists);
-
-            let mut branch_arg_vregs: SmallVec<[Reg; 16]> = smallvec![];
-            for &arg in branch_args {
-                let arg = self.f.dfg.resolve_aliases(arg);
-                let regs = self.put_value_in_regs(arg);
-                branch_arg_vregs.extend_from_slice(regs.regs());
-            }
-            self.vcode.add_succ(succ, &branch_arg_vregs[..]);
+        let mut branch_arg_vregs: SmallVec<[Reg; 16]> = smallvec![];
+        for &arg in branch_args {
+            let arg = self.f.dfg.resolve_aliases(arg);
+            let regs = self.put_value_in_regs(arg);
+            branch_arg_vregs.extend_from_slice(regs.regs());
         }
+        self.vcode.add_succ(succ, &branch_arg_vregs[..]);
     }
 
     fn collect_branches_and_targets(
@@ -1028,44 +1041,29 @@ impl<'func, I: VCodeInst> Lower<'func, I> {
             // `lower_clif_block()` for rationale).
 
             // End branches.
-            if let Some(bb) = lb.orig_block() {
-                if let Some(branch) = self.collect_branches_and_targets(bindex, bb, &mut targets) {
-                    self.lower_clif_branches(backend, bindex, bb, branch, &targets)?;
-                    self.finish_ir_inst(self.srcloc(branch));
-                }
-            } else {
-                // If no orig block, this must be a pure edge block;
-                // get the successor and emit a jump. Add block params
-                // according to the one successor, and pass them
-                // through; note that the successor must have an
-                // original block.
-                let (_, succs) = self.vcode.block_order().succ_indices(bindex);
-                let succ = succs[0];
-
-                let orig_succ = lowered_order[succ.index()];
-                let orig_succ = orig_succ
-                    .orig_block()
-                    .expect("Edge block succ must be body block");
-
-                let mut branch_arg_vregs: SmallVec<[Reg; 16]> = smallvec![];
-                for ty in self.f.dfg.block_param_types(orig_succ) {
-                    let regs = self.vregs.alloc(ty)?;
-                    for &reg in regs.regs() {
-                        branch_arg_vregs.push(reg);
-                        let vreg = reg.to_virtual_reg().unwrap();
-                        self.vcode.add_block_param(vreg);
+            match lb {
+                &LoweredBlock::Orig { block: bb } => {
+                    if let Some(branch) =
+                        self.collect_branches_and_targets(bindex, bb, &mut targets)
+                    {
+                        self.lower_clif_branches(backend, bindex, bb, branch, &targets)?;
+                        self.finish_ir_inst(self.srcloc(branch));
                     }
+
+                    // Original block body.
+                    self.lower_clif_block(backend, bb, ctrl_plane)?;
+                    self.emit_value_label_markers_for_block_args(bb);
                 }
-                self.vcode.add_succ(succ, &branch_arg_vregs[..]);
-
-                self.emit(I::gen_jump(MachLabel::from_block(succ)));
-                self.finish_ir_inst(Default::default());
-            }
-
-            // Original block body.
-            if let Some(bb) = lb.orig_block() {
-                self.lower_clif_block(backend, bb, ctrl_plane)?;
-                self.emit_value_label_markers_for_block_args(bb);
+                &LoweredBlock::CriticalEdge { pred, succ_idx, .. } => {
+                    // Emit a jump to the successor, placing the block params
+                    // that the predecessor was going to pass along here.
+                    let (_, succs) = self.vcode.block_order().succ_indices(bindex);
+                    let succ = succs[0];
+                    let branch = self.f.layout.last_inst(pred).unwrap();
+                    self.lower_branch_blockparam_args(branch, succ_idx as usize, succ);
+                    self.emit(I::gen_jump(MachLabel::from_block(succ)));
+                    self.finish_ir_inst(Default::default());
+                }
             }
 
             if bindex.index() == 0 {
