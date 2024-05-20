@@ -862,12 +862,27 @@ impl Rule {
     /// that was returned from [RuleVisitor::add_expr] when that function was called on the rule's
     /// right-hand side.
     pub fn visit<V: RuleVisitor>(&self, visitor: &mut V, termenv: &TermEnv) -> V::Expr {
+        let args = termenv.terms[self.root_term.index()]
+            .arg_tys
+            .iter()
+            .enumerate()
+            .map(|(i, &ty)| visitor.add_arg(i, ty))
+            .collect();
+        self.visit_inline(visitor, termenv, args)
+    }
+
+    /// Visit the patterns and expressions in this rule, with the given pattern
+    /// IDs as the rule's arguments.
+    pub fn visit_inline<V: RuleVisitor>(
+        &self,
+        visitor: &mut V,
+        termenv: &TermEnv,
+        args: Vec<<V::PatternVisitor as PatternVisitor>::PatternId>,
+    ) -> V::Expr {
         let mut vars = HashMap::new();
 
         // Visit the pattern, starting from the root input value.
-        let termdata = &termenv.terms[self.root_term.index()];
-        for (i, (subpat, &arg_ty)) in self.args.iter().zip(termdata.arg_tys.iter()).enumerate() {
-            let value = visitor.add_arg(i, arg_ty);
+        for (subpat, value) in self.args.iter().zip(args) {
             visitor.add_pattern(|visitor| subpat.visit(visitor, value, termenv, &mut vars));
         }
 
