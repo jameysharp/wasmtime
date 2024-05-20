@@ -233,6 +233,10 @@
       (wide_mul ty a0 b0 x y half))
 (rule (simplify (iadd ty (ishl _ (iadd _ x y) (iconst_u _ half)) (imul _ a0 b0)))
       (wide_mul ty a0 b0 x y half))
+(rule (simplify (uextend ty (ult _ (iadd ty x y) x)))
+      (wide_mul_overflow ty x y))
+(rule (simplify (uextend ty (ult _ (iadd ty x y) y)))
+      (wide_mul_overflow ty x y))
 
 (decl multi wide_mul (Type Value Value Value Value u64) Value)
 (rule (wide_mul ty a0 b0 x y half)
@@ -259,6 +263,16 @@
 (decl pure multi is_mul_by (Value Value) Value)
 (rule (is_mul_by x (imul _ x y)) y)
 (rule (is_mul_by x (imul _ y x)) y)
+
+(decl multi wide_mul_overflow (Type Value Value) Value)
+(rule (wide_mul_overflow ty (imul _ b0 a1) (imul _ b1 a0))
+      (if-let half (ty_bits_u64 (ty_half_width ty)))
+      (if-let lo_mask (u64_sub (u64_shl 1 half) 1))
+      (if-let (band _ a (iconst_u _ lo_mask)) a0)
+      (if-let (band _ b (iconst_u _ lo_mask)) b0)
+      (if-let (ushr _ a (iconst_u _ half)) a1)
+      (if-let (ushr _ b (iconst_u _ half)) b1)
+      (umulhi ty a b))
 
 ;; Cranelift's `fcvt_from_{u,s}int` instructions are polymorphic over the input
 ;; type so remove any unnecessary `uextend` or `sextend` to give backends
