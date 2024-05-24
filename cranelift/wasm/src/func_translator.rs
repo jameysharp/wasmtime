@@ -10,7 +10,7 @@ use crate::state::FuncTranslationState;
 use crate::translation_utils::get_vmctx_value_label;
 use crate::WasmResult;
 use cranelift_codegen::entity::EntityRef;
-use cranelift_codegen::ir::{self, Block, InstBuilder, ValueLabel};
+use cranelift_codegen::ir::{self, Block, InstBuilder, RelSourceLoc, ValueLabel};
 use cranelift_codegen::timing;
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Variable};
 use wasmparser::{BinaryReader, FuncValidator, FunctionBody, WasmFeatures, WasmModuleResources};
@@ -139,6 +139,7 @@ fn declare_wasm_parameters<FE: FuncEnvironment + ?Sized>(
             // This is a normal WebAssembly signature parameter, so create a local for it.
             let local = Variable::new(next_local);
             builder.declare_var(local, param_type.value_type);
+            builder.set_var_label(local, ValueLabel::new(next_local));
             next_local += 1;
 
             let param_value = builder.block_params(entry_block)[i];
@@ -146,7 +147,11 @@ fn declare_wasm_parameters<FE: FuncEnvironment + ?Sized>(
         }
         if param_type.purpose == ir::ArgumentPurpose::VMContext {
             let param_value = builder.block_params(entry_block)[i];
-            builder.set_val_label(param_value, get_vmctx_value_label());
+            builder.func.dfg.add_value_label(
+                param_value,
+                RelSourceLoc::new(0),
+                get_vmctx_value_label(),
+            );
         }
     }
 
@@ -231,9 +236,9 @@ fn declare_locals<FE: FuncEnvironment + ?Sized>(
     for _ in 0..count {
         let local = Variable::new(*next_local);
         builder.declare_var(local, ty);
+        builder.set_var_label(local, ValueLabel::new(*next_local));
         if let Some(init) = init {
             builder.def_var(local, init);
-            builder.set_val_label(init, ValueLabel::new(*next_local));
         }
         *next_local += 1;
     }

@@ -8,7 +8,7 @@ use crate::ir::instructions::{CallInfo, InstructionData};
 use crate::ir::pcc::Fact;
 use crate::ir::{
     types, Block, BlockCall, ConstantData, ConstantPool, DynamicType, ExtFuncData, FuncRef,
-    Immediate, Inst, JumpTables, RelSourceLoc, SigRef, Signature, Type, Value,
+    Immediate, Inst, JumpTables, RelSourceLoc, SigRef, Signature, Type, Value, ValueLabel,
     ValueLabelAssignments, ValueList, ValueListPool,
 };
 use crate::packed_option::ReservedValue;
@@ -231,6 +231,26 @@ impl DataFlowGraph {
     pub fn collect_debug_info(&mut self) {
         if self.values_labels.is_none() {
             self.values_labels = Some(Default::default());
+        }
+    }
+
+    /// Record that `label` is attached to the given `value` starting at
+    /// source location `from`, if debug info collection is enabled.
+    pub fn add_value_label(&mut self, value: Value, from: RelSourceLoc, label: ValueLabel) {
+        if let Some(values_labels) = &mut self.values_labels {
+            use alloc::collections::btree_map::Entry;
+
+            let start = ir::ValueLabelStart { from, label };
+
+            match values_labels.entry(value) {
+                Entry::Occupied(mut e) => match e.get_mut() {
+                    ValueLabelAssignments::Starts(starts) => starts.push(start),
+                    _ => panic!("Unexpected ValueLabelAssignments at this stage"),
+                },
+                Entry::Vacant(e) => {
+                    e.insert(ValueLabelAssignments::Starts(vec![start]));
+                }
+            }
         }
     }
 

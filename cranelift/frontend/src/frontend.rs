@@ -9,9 +9,8 @@ use cranelift_codegen::ir::condcodes::IntCC;
 use cranelift_codegen::ir::{
     types, AbiParam, Block, DataFlowGraph, DynamicStackSlot, DynamicStackSlotData, ExtFuncData,
     ExternalName, FuncRef, Function, GlobalValue, GlobalValueData, Inst, InstBuilder,
-    InstBuilderBase, InstructionData, JumpTable, JumpTableData, LibCall, MemFlags, RelSourceLoc,
-    SigRef, Signature, StackSlot, StackSlotData, Type, Value, ValueLabel, ValueLabelAssignments,
-    ValueLabelStart,
+    InstBuilderBase, InstructionData, JumpTable, JumpTableData, LibCall, MemFlags, SigRef,
+    Signature, StackSlot, StackSlotData, Type, Value, ValueLabel,
 };
 use cranelift_codegen::isa::TargetFrontendConfig;
 use cranelift_codegen::packed_option::PackedOption;
@@ -308,6 +307,9 @@ impl<'a> FunctionBuilder<'a> {
     /// Set the source location that should be assigned to all new instructions.
     pub fn set_srcloc(&mut self, srcloc: ir::SourceLoc) {
         self.srcloc = srcloc;
+        if let Some(block) = self.current_block() {
+            self.func_ctx.ssa.set_srcloc(block, srcloc);
+        }
     }
 
     /// Creates a new [`Block`] and returns its reference.
@@ -448,7 +450,9 @@ impl<'a> FunctionBuilder<'a> {
             return Err(DefVariableError::TypeMismatch(var, val));
         }
 
-        self.func_ctx.ssa.def_var(var, val, self.position.unwrap());
+        self.func_ctx
+            .ssa
+            .def_var(self.func, self.srcloc, var, val, self.position.unwrap());
         Ok(())
     }
 
@@ -472,28 +476,13 @@ impl<'a> FunctionBuilder<'a> {
             })
     }
 
-    /// Set label for [`Value`]
+    /// Set an uninterpreted label for a user variable.
     ///
     /// This will not do anything unless
     /// [`func.dfg.collect_debug_info`](DataFlowGraph::collect_debug_info) is called first.
-    pub fn set_val_label(&mut self, val: Value, label: ValueLabel) {
-        if let Some(values_labels) = self.func.stencil.dfg.values_labels.as_mut() {
-            use alloc::collections::btree_map::Entry;
-
-            let start = ValueLabelStart {
-                from: RelSourceLoc::from_base_offset(self.func.params.base_srcloc(), self.srcloc),
-                label,
-            };
-
-            match values_labels.entry(val) {
-                Entry::Occupied(mut e) => match e.get_mut() {
-                    ValueLabelAssignments::Starts(starts) => starts.push(start),
-                    _ => panic!("Unexpected ValueLabelAssignments at this stage"),
-                },
-                Entry::Vacant(e) => {
-                    e.insert(ValueLabelAssignments::Starts(vec![start]));
-                }
-            }
+    pub fn set_var_label(&mut self, var: Variable, label: ValueLabel) {
+        if self.func.dfg.values_labels.is_some() {
+            self.func_ctx.ssa.set_var_label(var, label);
         }
     }
 

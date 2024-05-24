@@ -14,7 +14,9 @@ use cranelift_codegen::cursor::{Cursor, FuncCursor};
 use cranelift_codegen::entity::{EntityList, EntitySet, ListPool, SecondaryMap};
 use cranelift_codegen::ir::immediates::{Ieee32, Ieee64};
 use cranelift_codegen::ir::types::{F32, F64, I128, I64};
-use cranelift_codegen::ir::{Block, Function, Inst, InstBuilder, Type, Value};
+use cranelift_codegen::ir::{
+    Block, Function, Inst, InstBuilder, RelSourceLoc, SourceLoc, Type, Value, ValueLabel,
+};
 use cranelift_codegen::packed_option::PackedOption;
 
 /// Structure containing the data relevant the construction of SSA for a given function.
@@ -32,10 +34,7 @@ use cranelift_codegen::packed_option::PackedOption;
 /// can be declared.
 #[derive(Default)]
 pub struct SSABuilder {
-    // TODO: Consider a sparse representation rather than SecondaryMap-of-SecondaryMap.
-    /// Records for every variable and for every relevant block, the last definition of
-    /// the variable in the block.
-    variables: SecondaryMap<Variable, SecondaryMap<Block, PackedOption<Value>>>,
+    variables: SecondaryMap<Variable, SSAVariableData>,
 
     /// Records the position of the basic blocks and the list of values used but not defined in the
     /// block.
@@ -93,13 +92,26 @@ impl Default for Sealed {
 }
 
 #[derive(Clone, Default)]
+struct SSAVariableData {
+    /// Records, for every relevant block, the last definition of the
+    /// variable in that block.
+    definitions: SecondaryMap<Block, PackedOption<Value>>,
+
+    /// Uninterpreted label to apply to all values associated with this
+    /// variable.
+    label: PackedOption<ValueLabel>,
+}
+
+#[derive(Clone, Default)]
 struct SSABlockData {
-    // The predecessors of the Block with the block and branch instruction.
+    /// The predecessors of the Block by branch instruction.
     predecessors: EntityList<Inst>,
-    // A block is sealed if all of its predecessors have been declared.
+    /// A block is sealed if all of its predecessors have been declared.
     sealed: Sealed,
-    // If this block is sealed and it has exactly one predecessor, this is that predecessor.
+    /// If this block is sealed and it has exactly one predecessor, this is that predecessor.
     single_predecessor: PackedOption<Block>,
+    /// First source location seen for this block.
+    base_srcloc: SourceLoc,
 }
 
 impl SSABuilder {
@@ -187,11 +199,30 @@ fn emit_zero(ty: Type, mut cur: FuncCursor) -> Value {
 /// Phi functions.
 ///
 impl SSABuilder {
+    pub fn set_var_label(&mut self, var: Variable, label: ValueLabel) {
+        self.variables[var].label = PackedOption::from(label);
+    }
+
+    fn apply_label(&mut self, func: &mut Function, srcloc: SourceLoc, var: Variable, val: Value) {
+        if let Some(label) = self.variables[var].label.expand() {
+            let from = RelSourceLoc::from_base_offset(func.params.base_srcloc(), srcloc);
+            func.dfg.add_value_label(val, from, label);
+        }
+    }
+
     /// Declares a new definition of a variable in a given basic block.
     /// The SSA value is passed as an argument because it should be created with
     /// `ir::DataFlowGraph::append_result`.
-    pub fn def_var(&mut self, var: Variable, val: Value, block: Block) {
-        self.variables[var][block] = PackedOption::from(val);
+    pub fn def_var(
+        &mut self,
+        func: &mut Function,
+        srcloc: SourceLoc,
+        var: Variable,
+        val: Value,
+        block: Block,
+    ) {
+        self.variables[var].definitions[block] = PackedOption::from(val);
+        self.apply_label(func, srcloc, var, val);
     }
 
     /// Declares a use of a variable in a given basic block. Returns the SSA value corresponding
@@ -226,7 +257,7 @@ impl SSABuilder {
     fn use_var_nonlocal(&mut self, func: &mut Function, var: Variable, ty: Type, mut block: Block) {
         // First, try Local Value Numbering (Algorithm 1 in the paper).
         // If the variable already has a known Value in this block, use that.
-        if let Some(val) = self.variables[var][block].expand() {
+        if let Some(val) = self.variables[var].definitions[block].expand() {
             self.results.push(val);
             return;
         }
@@ -254,7 +285,7 @@ impl SSABuilder {
         // any of the blocks before `from`.
         //
         // So in either case there is no definition in these blocks yet and we can blindly set one.
-        let var_defs = &mut self.variables[var];
+        let var_defs = &mut self.variables[var].definitions;
         while block != from {
             debug_assert!(var_defs[block].is_none());
             var_defs[block] = PackedOption::from(val);
@@ -294,7 +325,7 @@ impl SSABuilder {
     ) -> (Value, Block) {
         // Try to find an existing definition along single-predecessor edges first.
         self.visited.clear();
-        let var_defs = &mut self.variables[var];
+        let var_defs = &mut self.variables[var].definitions;
         while let Some(pred) = self.ssa_blocks[block].single_predecessor.expand() {
             if !self.visited.insert(block) {
                 break;
@@ -310,6 +341,11 @@ impl SSABuilder {
         // find a usable definition. So create one.
         let val = func.dfg.append_block_param(block, ty);
         var_defs[block] = PackedOption::from(val);
+
+        // Record that this block param is the location for this
+        // variable as of the beginning of this block.
+        let srcloc = self.ssa_blocks[block].base_srcloc;
+        self.apply_label(func, srcloc, var, val);
 
         // Now every predecessor needs to pass its definition of this variable to the newly added
         // block parameter. To do that we have to "recursively" call `use_var`, but there are two
@@ -336,6 +372,15 @@ impl SSABuilder {
         // variables get declared for this block. But don't assign anything to it:
         // SecondaryMap automatically sets all blocks to `default()`.
         let _ = &mut self.ssa_blocks[block];
+    }
+
+    /// Set the initial source location for the specified block, if none
+    /// has been set yet.
+    pub fn set_srcloc(&mut self, block: Block, srcloc: SourceLoc) {
+        let base_srcloc = &mut self.ssa_blocks[block].base_srcloc;
+        if base_srcloc.is_default() {
+            *base_srcloc = srcloc;
+        }
     }
 
     /// Declares a new predecessor for a `Block` and record the branch instruction
@@ -609,7 +654,7 @@ mod tests {
     use cranelift_codegen::entity::EntityRef;
     use cranelift_codegen::ir;
     use cranelift_codegen::ir::types::*;
-    use cranelift_codegen::ir::{Function, Inst, InstBuilder, JumpTableData, Opcode};
+    use cranelift_codegen::ir::{Function, Inst, InstBuilder, JumpTableData, Opcode, SourceLoc};
     use cranelift_codegen::settings;
     use cranelift_codegen::verify_function;
 
@@ -632,13 +677,13 @@ mod tests {
             cur.insert_block(block0);
             cur.ins().iconst(I32, 1)
         };
-        ssa.def_var(x_var, x_ssa, block0);
+        ssa.def_var(&mut func, SourceLoc::default(), x_var, x_ssa, block0);
         let y_var = Variable::new(1);
         let y_ssa = {
             let mut cur = FuncCursor::new(&mut func).at_bottom(block0);
             cur.ins().iconst(I32, 2)
         };
-        ssa.def_var(y_var, y_ssa, block0);
+        ssa.def_var(&mut func, SourceLoc::default(), y_var, y_ssa, block0);
         assert_eq!(ssa.use_var(&mut func, x_var, I32, block0).0, x_ssa);
         assert_eq!(ssa.use_var(&mut func, y_var, I32, block0).0, y_ssa);
 
@@ -649,7 +694,7 @@ mod tests {
             let mut cur = FuncCursor::new(&mut func).at_bottom(block0);
             cur.ins().iadd(x_use1, y_use1)
         };
-        ssa.def_var(z_var, z1_ssa, block0);
+        ssa.def_var(&mut func, SourceLoc::default(), z_var, z1_ssa, block0);
         assert_eq!(ssa.use_var(&mut func, z_var, I32, block0).0, z1_ssa);
 
         let x_use2 = ssa.use_var(&mut func, x_var, I32, block0).0;
@@ -658,7 +703,7 @@ mod tests {
             let mut cur = FuncCursor::new(&mut func).at_bottom(block0);
             cur.ins().iadd(x_use2, z_use1)
         };
-        ssa.def_var(z_var, z2_ssa, block0);
+        ssa.def_var(&mut func, SourceLoc::default(), z_var, z2_ssa, block0);
         assert_eq!(ssa.use_var(&mut func, z_var, I32, block0).0, z2_ssa);
     }
 
@@ -695,13 +740,13 @@ mod tests {
             let mut cur = FuncCursor::new(&mut func).at_bottom(block0);
             cur.ins().iconst(I32, 1)
         };
-        ssa.def_var(x_var, x_ssa, block0);
+        ssa.def_var(&mut func, SourceLoc::default(), x_var, x_ssa, block0);
         let y_var = Variable::new(1);
         let y_ssa = {
             let mut cur = FuncCursor::new(&mut func).at_bottom(block0);
             cur.ins().iconst(I32, 2)
         };
-        ssa.def_var(y_var, y_ssa, block0);
+        ssa.def_var(&mut func, SourceLoc::default(), y_var, y_ssa, block0);
         let z_var = Variable::new(2);
         let x_use1 = ssa.use_var(&mut func, x_var, I32, block0).0;
         let y_use1 = ssa.use_var(&mut func, y_var, I32, block0).0;
@@ -709,7 +754,7 @@ mod tests {
             let mut cur = FuncCursor::new(&mut func).at_bottom(block0);
             cur.ins().iadd(x_use1, y_use1)
         };
-        ssa.def_var(z_var, z1_ssa, block0);
+        ssa.def_var(&mut func, SourceLoc::default(), z_var, z1_ssa, block0);
         let y_use2 = ssa.use_var(&mut func, y_var, I32, block0).0;
         let brif_block0_block2_block1: Inst = {
             let mut cur = FuncCursor::new(&mut func).at_bottom(block0);
@@ -731,7 +776,7 @@ mod tests {
             let mut cur = FuncCursor::new(&mut func).at_bottom(block1);
             cur.ins().iadd(x_use2, z_use1)
         };
-        ssa.def_var(z_var, z2_ssa, block1);
+        ssa.def_var(&mut func, SourceLoc::default(), z_var, z2_ssa, block1);
         let jump_block1_block2: Inst = {
             let mut cur = FuncCursor::new(&mut func).at_bottom(block1);
             cur.ins().jump(block2, &[])
@@ -752,7 +797,7 @@ mod tests {
             let mut cur = FuncCursor::new(&mut func).at_bottom(block2);
             cur.ins().iadd(x_use3, y_use3)
         };
-        ssa.def_var(y_var, y2_ssa, block2);
+        ssa.def_var(&mut func, SourceLoc::default(), y_var, y2_ssa, block2);
 
         assert_eq!(x_ssa, x_use3);
         assert_eq!(y_ssa, y_use3);
@@ -830,13 +875,13 @@ mod tests {
             let mut cur = FuncCursor::new(&mut func).at_bottom(block0);
             cur.ins().iconst(I32, 1)
         };
-        ssa.def_var(x_var, x1, block0);
+        ssa.def_var(&mut func, SourceLoc::default(), x_var, x1, block0);
         let y_var = Variable::new(1);
         let y1 = {
             let mut cur = FuncCursor::new(&mut func).at_bottom(block0);
             cur.ins().iconst(I32, 2)
         };
-        ssa.def_var(y_var, y1, block0);
+        ssa.def_var(&mut func, SourceLoc::default(), y_var, y1, block0);
         let z_var = Variable::new(2);
         let x2 = ssa.use_var(&mut func, x_var, I32, block0).0;
         let y2 = ssa.use_var(&mut func, y_var, I32, block0).0;
@@ -844,7 +889,7 @@ mod tests {
             let mut cur = FuncCursor::new(&mut func).at_bottom(block0);
             cur.ins().iadd(x2, y2)
         };
-        ssa.def_var(z_var, z1, block0);
+        ssa.def_var(&mut func, SourceLoc::default(), z_var, z1, block0);
         let jump_block0_block1 = {
             let mut cur = FuncCursor::new(&mut func).at_bottom(block0);
             cur.ins().jump(block1, &[])
@@ -863,7 +908,7 @@ mod tests {
             let mut cur = FuncCursor::new(&mut func).at_bottom(block1);
             cur.ins().iadd(z2, y3)
         };
-        ssa.def_var(z_var, z3, block1);
+        ssa.def_var(&mut func, SourceLoc::default(), z_var, z3, block1);
         let y4 = ssa.use_var(&mut func, y_var, I32, block1).0;
         assert_eq!(y4, y3);
         let brif_block1_block3_block2 = {
@@ -882,7 +927,7 @@ mod tests {
             let mut cur = FuncCursor::new(&mut func).at_bottom(block2);
             cur.ins().isub(z4, x3)
         };
-        ssa.def_var(z_var, z5, block2);
+        ssa.def_var(&mut func, SourceLoc::default(), z_var, z5, block2);
         let y5 = ssa.use_var(&mut func, y_var, I32, block2).0;
         assert_eq!(y5, y3);
         {
@@ -902,7 +947,7 @@ mod tests {
             let mut cur = FuncCursor::new(&mut func).at_bottom(block3);
             cur.ins().isub(y6, x4)
         };
-        ssa.def_var(y_var, y7, block3);
+        ssa.def_var(&mut func, SourceLoc::default(), y_var, y7, block3);
         let jump_block3_block1 = {
             let mut cur = FuncCursor::new(&mut func).at_bottom(block3);
             cur.ins().jump(block1, &[])
@@ -954,7 +999,7 @@ mod tests {
         ssa.declare_block(block0);
         ssa.seal_block(block0, &mut func);
         let x_var = Variable::new(0);
-        ssa.def_var(x_var, x1, block0);
+        ssa.def_var(&mut func, SourceLoc::default(), x_var, x1, block0);
         ssa.use_var(&mut func, x_var, I32, block0).0;
         let br_table = {
             let jump_table = JumpTableData::new(
@@ -977,7 +1022,7 @@ mod tests {
             let mut cur = FuncCursor::new(&mut func).at_bottom(block1);
             cur.ins().iconst(I32, 2)
         };
-        ssa.def_var(x_var, x2, block1);
+        ssa.def_var(&mut func, SourceLoc::default(), x_var, x2, block1);
         let jump_block1_block2 = {
             let mut cur = FuncCursor::new(&mut func).at_bottom(block1);
             cur.ins().jump(block2, &[])
@@ -993,7 +1038,7 @@ mod tests {
             let mut cur = FuncCursor::new(&mut func).at_bottom(block2);
             cur.ins().iadd_imm(x3, 1)
         };
-        ssa.def_var(x_var, x4, block2);
+        ssa.def_var(&mut func, SourceLoc::default(), x_var, x4, block2);
         {
             let mut cur = FuncCursor::new(&mut func).at_bottom(block2);
             cur.ins().return_(&[])
@@ -1042,19 +1087,19 @@ mod tests {
             let mut cur = FuncCursor::new(&mut func).at_bottom(block0);
             cur.ins().iconst(I32, 0)
         };
-        ssa.def_var(x_var, x1, block0);
+        ssa.def_var(&mut func, SourceLoc::default(), x_var, x1, block0);
         let y_var = Variable::new(1);
         let y1 = {
             let mut cur = FuncCursor::new(&mut func).at_bottom(block0);
             cur.ins().iconst(I32, 1)
         };
-        ssa.def_var(y_var, y1, block0);
+        ssa.def_var(&mut func, SourceLoc::default(), y_var, y1, block0);
         let z_var = Variable::new(2);
         let z1 = {
             let mut cur = FuncCursor::new(&mut func).at_bottom(block0);
             cur.ins().iconst(I32, 2)
         };
-        ssa.def_var(z_var, z1, block0);
+        ssa.def_var(&mut func, SourceLoc::default(), z_var, z1, block0);
         let jump_block0_block1 = {
             let mut cur = FuncCursor::new(&mut func).at_bottom(block0);
             cur.ins().jump(block1, &[])
@@ -1071,7 +1116,7 @@ mod tests {
             let mut cur = FuncCursor::new(&mut func).at_bottom(block1);
             cur.ins().iadd(x2, z2)
         };
-        ssa.def_var(x_var, x3, block1);
+        ssa.def_var(&mut func, SourceLoc::default(), x_var, x3, block1);
         let x4 = ssa.use_var(&mut func, x_var, I32, block1).0;
         let y3 = ssa.use_var(&mut func, y_var, I32, block1).0;
         assert_eq!(func.dfg.block_params(block1)[2], y3);
@@ -1079,7 +1124,7 @@ mod tests {
             let mut cur = FuncCursor::new(&mut func).at_bottom(block1);
             cur.ins().isub(y3, x4)
         };
-        ssa.def_var(y_var, y4, block1);
+        ssa.def_var(&mut func, SourceLoc::default(), y_var, y4, block1);
         let jump_block1_block1 = {
             let mut cur = FuncCursor::new(&mut func).at_bottom(block1);
             cur.ins().jump(block1, &[])
@@ -1297,7 +1342,7 @@ mod tests {
             let mut cur = FuncCursor::new(&mut func).at_bottom(block0);
 
             let var0_iconst = cur.ins().iconst(I32, 0);
-            ssa.def_var(var0, var0_iconst, block0);
+            ssa.def_var(cur.func, SourceLoc::default(), var0, var0_iconst, block0);
 
             cur.ins().return_(&[]);
         }
@@ -1316,7 +1361,7 @@ mod tests {
 
             let _ = ssa.use_var(&mut cur.func, var0, I32, block2).0;
             let var0_iconst = cur.ins().iconst(I32, 1);
-            ssa.def_var(var0, var0_iconst, block2);
+            ssa.def_var(cur.func, SourceLoc::default(), var0, var0_iconst, block2);
 
             let jump = cur.ins().jump(block1, &[]);
             ssa.declare_block_predecessor(block1, jump);
