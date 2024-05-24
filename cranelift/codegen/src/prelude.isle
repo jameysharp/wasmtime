@@ -289,11 +289,11 @@
 (extern constructor ty_umax ty_umax)
 
 ;; Get the signed minimum value for a given type.
-(decl pure ty_smin (Type) u64)
+(decl pure partial ty_smin (Type) u64)
 (extern constructor ty_smin ty_smin)
 
 ;; Get the signed maximum value for a given type.
-(decl pure ty_smax (Type) u64)
+(decl pure partial ty_smax (Type) u64)
 (extern constructor ty_smax ty_smax)
 
 ;; Get the bit width of a given type.
