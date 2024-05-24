@@ -6,7 +6,9 @@
 use crate::entity::SecondaryMap;
 use crate::ir::entities::AnyEntity;
 use crate::ir::pcc::Fact;
-use crate::ir::{Block, DataFlowGraph, Function, Inst, SigRef, Type, Value, ValueDef};
+use crate::ir::{
+    Block, DataFlowGraph, Function, Inst, SigRef, Type, Value, ValueDef, ValueLabelAssignments,
+};
 use crate::packed_option::ReservedValue;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
@@ -487,6 +489,24 @@ pub fn write_operands(w: &mut dyn Write, dfg: &DataFlowGraph, inst: Inst) -> fmt
 
     let mut sep = "  ; ";
     for arg in dfg.inst_values(inst) {
+        if let Some(values_labels) = &dfg.values_labels {
+            if let Some(assignments) = values_labels.get(&arg) {
+                write!(w, "{sep}{arg}")?;
+                match assignments {
+                    ValueLabelAssignments::Starts(labels) => {
+                        sep = " is ";
+                        for label in labels {
+                            write!(w, "{sep}{}{}", label.label, label.from)?;
+                            sep = "/";
+                        }
+                    }
+                    ValueLabelAssignments::Alias { from, value } => {
+                        write!(w, " from {value}{from}")?;
+                    }
+                }
+                sep = ", ";
+            }
+        }
         if let ValueDef::Result(src, _) = dfg.value_def(arg) {
             let imm = match dfg.insts[src] {
                 UnaryImm { imm, .. } => imm.to_string(),
