@@ -107,10 +107,12 @@ impl DecommitQueue {
     /// called (no other references, not in use, won't be otherwise unmapped,
     /// etc...).
     pub unsafe fn push_raw(&mut self, ptr: *mut u8, len: usize) {
-        self.raw.push(IoVec(iovec {
-            iov_base: ptr.cast(),
-            iov_len: len,
-        }));
+        if len != 0 {
+            self.raw.push(IoVec(iovec {
+                iov_base: ptr.cast(),
+                iov_len: len,
+            }));
+        }
     }
 
     /// Push a memory into the queue.

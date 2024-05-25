@@ -512,130 +512,77 @@ impl MemoryImageSlot {
     unsafe fn reset_with_original_mapping(
         &mut self,
         keep_resident: usize,
-        mut decommit: impl FnMut(*mut u8, usize),
+        decommit: impl FnMut(*mut u8, usize),
     ) {
         match &self.image {
             Some(image) => {
-                assert!(self.accessible >= image.linear_memory_offset + image.len);
-                if image.linear_memory_offset < keep_resident {
-                    // If the image starts below the `keep_resident` then
-                    // memory looks something like this:
-                    //
-                    //               up to `keep_resident` bytes
-                    //                          |
-                    //          +--------------------------+  remaining_memset
-                    //          |                          | /
-                    //  <-------------->                <------->
-                    //
-                    //                              image_end
-                    // 0        linear_memory_offset   |             accessible
-                    // |                |              |                  |
-                    // +----------------+--------------+---------+--------+
-                    // |  dirty memory  |    image     |   dirty memory   |
-                    // +----------------+--------------+---------+--------+
-                    //
-                    //  <------+-------> <-----+----->  <---+---> <--+--->
-                    //         |               |            |        |
-                    //         |               |            |        |
-                    //   memset (1)            /            |   madvise (4)
-                    //                  mmadvise (2)       /
-                    //                                    /
-                    //                              memset (3)
-                    //
-                    //
-                    // In this situation there are two disjoint regions that are
-                    // `memset` manually to zero. Note that `memset (3)` may be
-                    // zero bytes large. Furthermore `madvise (4)` may also be
-                    // zero bytes large.
-
-                    let image_end = image.linear_memory_offset + image.len;
-                    let mem_after_image = self.accessible - image_end;
-                    let remaining_memset =
-                        (keep_resident - image.linear_memory_offset).min(mem_after_image);
-
-                    // This is memset (1)
-                    ptr::write_bytes(self.base.as_ptr(), 0u8, image.linear_memory_offset);
-
-                    // This is madvise (2)
-                    self.restore_original_mapping(
-                        image.linear_memory_offset,
-                        image.len,
-                        &mut decommit,
-                    );
-
-                    // This is memset (3)
-                    ptr::write_bytes(self.base.as_ptr().add(image_end), 0u8, remaining_memset);
-
-                    // This is madvise (4)
-                    self.restore_original_mapping(
-                        image_end + remaining_memset,
-                        mem_after_image - remaining_memset,
-                        &mut decommit,
-                    );
-                } else {
-                    // If the image starts after the `keep_resident` threshold
-                    // then we memset the start of linear memory and then use
-                    // madvise below for the rest of it, including the image.
-                    //
-                    // 0             keep_resident                   accessible
-                    // |                |                                 |
-                    // +----------------+---+----------+------------------+
-                    // |  dirty memory      |  image   |   dirty memory   |
-                    // +----------------+---+----------+------------------+
-                    //
-                    //  <------+-------> <-------------+----------------->
-                    //         |                       |
-                    //         |                       |
-                    //   memset (1)                 madvise (2)
-                    //
-                    // Here only a single memset is necessary since the image
-                    // started after the threshold which we're keeping resident.
-                    // Note that the memset may be zero bytes here.
-
-                    // This is memset (1)
-                    ptr::write_bytes(self.base.as_ptr(), 0u8, keep_resident);
-
-                    // This is madvise (2)
-                    self.restore_original_mapping(
-                        keep_resident,
-                        self.accessible - keep_resident,
-                        decommit,
-                    );
-                }
+                // Memory looks something like this:
+                //
+                //                              image_end
+                // 0        linear_memory_offset   |             accessible
+                // |                |              |                  |
+                // +----------------+--------------+---------+--------+
+                // |  dirty memory  |    image     |   dirty memory   |
+                // +----------------+--------------+---------+--------+
+                //
+                // We can memset the dirty-memory ranges if we want to,
+                // or use madvise otherwise, but since we're trying to
+                // preserve the original mapping, we must not memset
+                // the image.
+                self.restore_original_mappings(
+                    keep_resident,
+                    decommit,
+                    &[
+                        // (can_memset, end)
+                        (true, image.linear_memory_offset),
+                        (false, image.linear_memory_offset + image.len),
+                        (true, self.accessible),
+                    ],
+                );
             }
 
-            // If there's no memory image for this slot then memset the first
-            // bytes in the memory back to zero while using `madvise` to purge
-            // the rest.
+            // If there's no memory image for this slot then we can
+            // memset the whole range.
             None => {
-                let size_to_memset = keep_resident.min(self.accessible);
-                ptr::write_bytes(self.base.as_ptr(), 0u8, size_to_memset);
-                self.restore_original_mapping(
-                    size_to_memset,
-                    self.accessible - size_to_memset,
-                    decommit,
-                );
+                self.restore_original_mappings(keep_resident, decommit, &[(true, self.accessible)])
             }
         }
     }
 
     #[allow(dead_code)] // ignore warnings as this is only used in some cfgs
-    unsafe fn restore_original_mapping(
-        &self,
-        base: usize,
-        len: usize,
+    unsafe fn restore_original_mappings(
+        &mut self,
+        keep_resident: usize,
         mut decommit: impl FnMut(*mut u8, usize),
+        ranges: &[(bool, usize)],
     ) {
-        assert!(base + len <= self.accessible);
-        if len == 0 {
-            return;
-        }
-
         assert_eq!(
             vm::decommit_behavior(),
             DecommitBehavior::RestoreOriginalMapping
         );
-        decommit(self.base.as_ptr().add(base), len);
+
+        let mut start = 0;
+        for &(can_memset, end) in ranges {
+            assert!(
+                start <= end && end <= self.accessible,
+                "expected {start} <= {end} <= {}",
+                self.accessible
+            );
+
+            // Split this range if we want to keep part of it resident
+            // with memset.
+            if can_memset && start < keep_resident {
+                // Don't memset past the end of either this
+                // range or the keep_resident range.
+                let memset_len = keep_resident.min(end) - start;
+                ptr::write_bytes(self.base.as_ptr().add(start), 0u8, memset_len);
+                start += memset_len;
+            }
+
+            decommit(self.base.as_ptr().add(start), end - start);
+
+            start = end;
+        }
     }
 
     fn set_protection(&self, range: Range<usize>, readwrite: bool) -> Result<()> {
