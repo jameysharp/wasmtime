@@ -19,8 +19,8 @@ use cranelift_wasm::{
 use std::mem;
 use wasmparser::Operator;
 use wasmtime_environ::{
-    BuiltinFunctionIndex, MemoryPlan, MemoryStyle, Module, ModuleTranslation, ModuleTypesBuilder,
-    PtrSize, TableStyle, Tunables, TypeConvert, VMOffsets,
+    BuiltinFunctionIndex, MemoryPlan, MemoryStyle, ModuleTranslation, ModuleTypesBuilder, PtrSize,
+    TableStyle, Tunables, TypeConvert, VMOffsets,
 };
 use wasmtime_environ::{FUNCREF_INIT_BIT, FUNCREF_MASK};
 
@@ -82,11 +82,8 @@ wasmtime_environ::foreach_builtin_function!(declare_function_signatures);
 /// The `FuncEnvironment` implementation for use by the `ModuleEnvironment`.
 pub struct FuncEnvironment<'module_environment> {
     isa: &'module_environment (dyn TargetIsa + 'module_environment),
-    module: &'module_environment Module,
-    types: &'module_environment ModuleTypesBuilder,
-
-    #[cfg(feature = "wmemcheck")]
     translation: &'module_environment ModuleTranslation<'module_environment>,
+    types: &'module_environment ModuleTypesBuilder,
 
     /// Heaps implementing WebAssembly linear memories.
     heaps: PrimaryMap<Heap, HeapData>,
@@ -156,7 +153,7 @@ impl<'module_environment> FuncEnvironment<'module_environment> {
 
         Self {
             isa,
-            module: &translation.module,
+            translation,
             types,
             heaps: PrimaryMap::default(),
             tables: SecondaryMap::default(),
@@ -176,8 +173,6 @@ impl<'module_environment> FuncEnvironment<'module_environment> {
 
             #[cfg(feature = "wmemcheck")]
             wmemcheck,
-            #[cfg(feature = "wmemcheck")]
-            translation,
         }
     }
 
@@ -258,7 +253,7 @@ impl<'module_environment> FuncEnvironment<'module_environment> {
     ) -> (ir::GlobalValue, i32) {
         let pointer_type = self.pointer_type();
         let vmctx = self.vmctx(func);
-        if let Some(def_index) = self.module.defined_global_index(index) {
+        if let Some(def_index) = self.translation.module.defined_global_index(index) {
             let offset = i32::try_from(self.offsets.vmctx_vmglobal_definition(def_index)).unwrap();
             (vmctx, offset)
         } else {
@@ -666,7 +661,7 @@ impl<'module_environment> FuncEnvironment<'module_environment> {
     }
 
     fn memory_index_type(&self, index: MemoryIndex) -> ir::Type {
-        if self.module.memory_plans[index].memory.memory64 {
+        if self.translation.module.memory_plans[index].memory.memory64 {
             I64
         } else {
             I32
@@ -702,7 +697,10 @@ impl<'module_environment> FuncEnvironment<'module_environment> {
             // but that is neither here nor there. We want to logically do an
             // unsigned extend *except* when we are given the `-1` sentinel,
             // which we must preserve as `-1` in the wider type.
-            match self.module.memory_plans[index].memory.page_size_log2 {
+            match self.translation.module.memory_plans[index]
+                .memory
+                .page_size_log2
+            {
                 16 => {
                     // In the case that we have default page sizes, we can
                     // always sign extend, since valid memory lengths (in pages)
@@ -752,7 +750,7 @@ impl<'module_environment> FuncEnvironment<'module_environment> {
 
         let (ptr, base_offset, current_elements_offset) = {
             let vmctx = self.vmctx(func);
-            if let Some(def_index) = self.module.defined_table_index(index) {
+            if let Some(def_index) = self.translation.module.defined_table_index(index) {
                 let base_offset =
                     i32::try_from(self.offsets.vmctx_vmtable_definition_base(def_index)).unwrap();
                 let current_elements_offset = i32::try_from(
@@ -776,7 +774,7 @@ impl<'module_environment> FuncEnvironment<'module_environment> {
             }
         };
 
-        let table = &self.module.table_plans[index].table;
+        let table = &self.translation.module.table_plans[index].table;
         let element_size = if table.wasm_ty.is_vmgcref_type() {
             // For GC-managed references, tables store `Option<VMGcRef>`s.
             ir::types::I32.bytes()
@@ -1082,7 +1080,12 @@ impl<'a, 'func, 'module_env> Call<'a, 'func, 'module_env> {
             .unwrap();
 
         // Handle direct calls to locally-defined functions.
-        if !self.env.module.is_imported_function(callee_index) {
+        if !self
+            .env
+            .translation
+            .module
+            .is_imported_function(callee_index)
+        {
             // First append the callee vmctx address, which is the same as the caller vmctx in
             // this case.
             real_call_args.push(caller_vmctx);
@@ -1166,7 +1169,7 @@ impl<'a, 'func, 'module_env> Call<'a, 'func, 'module_env> {
         cold_blocks: bool,
     ) -> WasmResult<Option<(ir::Value, ir::Value)>> {
         // Get the funcref pointer from the table.
-        let table = &self.env.module.table_plans[table_index];
+        let table = &self.env.translation.module.table_plans[table_index];
         let TableStyle::CallerChecksSignature { lazy_init } = table.style;
         let funcref_ptr = self.env.get_or_init_func_ref_table_elem(
             self.builder,
@@ -1216,7 +1219,7 @@ impl<'a, 'func, 'module_env> Call<'a, 'func, 'module_env> {
         funcref_ptr: ir::Value,
     ) -> CheckIndirectCallTypeSignature {
         let pointer_type = self.env.pointer_type();
-        let table = &self.env.module.table_plans[table_index];
+        let table = &self.env.translation.module.table_plans[table_index];
         let sig_id_size = self.env.offsets.size_of_vmshared_type_index();
         let sig_id_type = Type::int(u16::from(sig_id_size) * 8).unwrap();
 
@@ -1240,7 +1243,7 @@ impl<'a, 'func, 'module_env> Call<'a, 'func, 'module_env> {
                 // If `ty_index` matches `table_ty`, then this call is
                 // statically known to have the right type, so no checks are
                 // necessary.
-                let specified_ty = self.env.module.types[ty_index];
+                let specified_ty = self.env.translation.module.types[ty_index];
                 if specified_ty == table_ty {
                     return CheckIndirectCallTypeSignature::StaticMatch {
                         may_be_null: table.table.wasm_ty.nullable,
@@ -1308,7 +1311,7 @@ impl<'a, 'func, 'module_env> Call<'a, 'func, 'module_env> {
             base,
             i32::from(self.env.offsets.ptr.vmctx_type_ids_array()),
         );
-        let sig_index = self.env.module.types[ty_index];
+        let sig_index = self.env.translation.module.types[ty_index];
         let offset =
             i32::try_from(sig_index.as_u32().checked_mul(sig_id_type.bytes()).unwrap()).unwrap();
         let caller_sig_id = self
@@ -1455,11 +1458,12 @@ impl<'a, 'func, 'module_env> Call<'a, 'func, 'module_env> {
 
 impl TypeConvert for FuncEnvironment<'_> {
     fn lookup_heap_type(&self, ty: wasmparser::UnpackedIndex) -> WasmHeapType {
-        wasmtime_environ::WasmparserTypeConverter::new(self.types, self.module).lookup_heap_type(ty)
+        wasmtime_environ::WasmparserTypeConverter::new(self.types, &self.translation.module)
+            .lookup_heap_type(ty)
     }
 
     fn lookup_type_index(&self, index: wasmparser::UnpackedIndex) -> EngineOrModuleTypeIndex {
-        wasmtime_environ::WasmparserTypeConverter::new(self.types, self.module)
+        wasmtime_environ::WasmparserTypeConverter::new(self.types, &self.translation.module)
             .lookup_type_index(index)
     }
 }
@@ -1506,7 +1510,10 @@ impl<'module_environment> cranelift_wasm::FuncEnvironment for FuncEnvironment<'m
         delta: ir::Value,
         init_value: ir::Value,
     ) -> WasmResult<ir::Value> {
-        let ty = self.module.table_plans[table_index].table.wasm_ty.heap_type;
+        let ty = self.translation.module.table_plans[table_index]
+            .table
+            .wasm_ty
+            .heap_type;
         let grow = if ty.is_vmgcref_type() {
             gc::gc_ref_table_grow_builtin(ty, self, &mut pos.func)?
         } else {
@@ -1530,7 +1537,7 @@ impl<'module_environment> cranelift_wasm::FuncEnvironment for FuncEnvironment<'m
         table_index: TableIndex,
         index: ir::Value,
     ) -> WasmResult<ir::Value> {
-        let plan = &self.module.table_plans[table_index];
+        let plan = &self.translation.module.table_plans[table_index];
         self.ensure_table_exists(builder.func, table_index);
         let table_data = self.tables[table_index].as_ref().unwrap();
         let heap_ty = plan.table.wasm_ty.heap_type;
@@ -1586,7 +1593,7 @@ impl<'module_environment> cranelift_wasm::FuncEnvironment for FuncEnvironment<'m
         index: ir::Value,
     ) -> WasmResult<()> {
         let pointer_type = self.pointer_type();
-        let plan = &self.module.table_plans[table_index];
+        let plan = &self.translation.module.table_plans[table_index];
         self.ensure_table_exists(builder.func, table_index);
         let table_data = self.tables[table_index].as_ref().unwrap();
         let heap_ty = plan.table.wasm_ty.heap_type;
@@ -1659,7 +1666,10 @@ impl<'module_environment> cranelift_wasm::FuncEnvironment for FuncEnvironment<'m
         val: ir::Value,
         len: ir::Value,
     ) -> WasmResult<()> {
-        let ty = self.module.table_plans[table_index].table.wasm_ty.heap_type;
+        let ty = self.translation.module.table_plans[table_index]
+            .table
+            .wasm_ty
+            .heap_type;
         let libcall = if ty.is_vmgcref_type() {
             gc::gc_ref_table_fill_builtin(ty, self, &mut pos.func)?
         } else {
@@ -1761,7 +1771,7 @@ impl<'module_environment> cranelift_wasm::FuncEnvironment for FuncEnvironment<'m
         mut pos: cranelift_codegen::cursor::FuncCursor<'_>,
         index: cranelift_wasm::GlobalIndex,
     ) -> WasmResult<ir::Value> {
-        let ty = self.module.globals[index].wasm_ty;
+        let ty = self.translation.module.globals[index].wasm_ty;
         debug_assert!(
             ty.is_vmgcref_type(),
             "We only use GlobalVariable::Custom for VMGcRef types"
@@ -1785,7 +1795,7 @@ impl<'module_environment> cranelift_wasm::FuncEnvironment for FuncEnvironment<'m
         index: cranelift_wasm::GlobalIndex,
         value: ir::Value,
     ) -> WasmResult<()> {
-        let ty = self.module.globals[index].wasm_ty;
+        let ty = self.translation.module.globals[index].wasm_ty;
         debug_assert!(
             ty.is_vmgcref_type(),
             "We only use GlobalVariable::Custom for VMGcRef types"
@@ -1805,9 +1815,9 @@ impl<'module_environment> cranelift_wasm::FuncEnvironment for FuncEnvironment<'m
 
     fn make_heap(&mut self, func: &mut ir::Function, index: MemoryIndex) -> WasmResult<Heap> {
         let pointer_type = self.pointer_type();
-        let is_shared = self.module.memory_plans[index].memory.shared;
+        let is_shared = self.translation.module.memory_plans[index].memory.shared;
 
-        let min_size = self.module.memory_plans[index]
+        let min_size = self.translation.module.memory_plans[index]
             .memory
             .minimum_byte_size()
             .unwrap_or_else(|_| {
@@ -1815,19 +1825,27 @@ impl<'module_environment> cranelift_wasm::FuncEnvironment for FuncEnvironment<'m
                 // integer is the maximum memory64 size (2^64) which is one
                 // larger than `u64::MAX` (2^64 - 1). In this case, just say the
                 // minimum heap size is `u64::MAX`.
-                debug_assert_eq!(self.module.memory_plans[index].memory.minimum, 1 << 48);
-                debug_assert_eq!(self.module.memory_plans[index].memory.page_size(), 1 << 16);
+                debug_assert_eq!(
+                    self.translation.module.memory_plans[index].memory.minimum,
+                    1 << 48
+                );
+                debug_assert_eq!(
+                    self.translation.module.memory_plans[index]
+                        .memory
+                        .page_size(),
+                    1 << 16
+                );
                 u64::MAX
             });
 
-        let max_size = self.module.memory_plans[index]
+        let max_size = self.translation.module.memory_plans[index]
             .memory
             .maximum_byte_size()
             .ok();
 
         let (ptr, base_offset, current_length_offset, ptr_memtype) = {
             let vmctx = self.vmctx(func);
-            if let Some(def_index) = self.module.defined_memory_index(index) {
+            if let Some(def_index) = self.translation.module.defined_memory_index(index) {
                 if is_shared {
                     // As with imported memory, the `VMMemoryDefinition` for a
                     // shared memory is stored elsewhere. We store a `*mut
@@ -1846,7 +1864,7 @@ impl<'module_environment> cranelift_wasm::FuncEnvironment for FuncEnvironment<'m
                         i32::from(self.offsets.ptr.vmmemory_definition_current_length());
                     (memory, base_offset, current_length_offset, def_mt)
                 } else {
-                    let owned_index = self.module.owned_memory_index(def_index);
+                    let owned_index = self.translation.module.owned_memory_index(def_index);
                     let owned_base_offset =
                         self.offsets.vmctx_vmmemory_definition_base(owned_index);
                     let owned_length_offset = self
@@ -1877,12 +1895,14 @@ impl<'module_environment> cranelift_wasm::FuncEnvironment for FuncEnvironment<'m
             }
         };
 
-        let page_size_log2 = self.module.memory_plans[index].memory.page_size_log2;
+        let page_size_log2 = self.translation.module.memory_plans[index]
+            .memory
+            .page_size_log2;
 
         // If we have a declared maximum, we can make this a "static" heap, which is
         // allocated up front and never moved.
         let (offset_guard_size, heap_style, readonly_base, base_fact, memory_type) =
-            match self.module.memory_plans[index] {
+            match self.translation.module.memory_plans[index] {
                 MemoryPlan {
                     style: MemoryStyle::Dynamic { .. },
                     offset_guard_size,
@@ -2052,7 +2072,7 @@ impl<'module_environment> cranelift_wasm::FuncEnvironment for FuncEnvironment<'m
         func: &mut ir::Function,
         index: GlobalIndex,
     ) -> WasmResult<GlobalVariable> {
-        let ty = self.module.globals[index].wasm_ty;
+        let ty = self.translation.module.globals[index].wasm_ty;
 
         if ty.is_vmgcref_type() {
             // Although reference-typed globals live at the same memory location as
@@ -2077,7 +2097,7 @@ impl<'module_environment> cranelift_wasm::FuncEnvironment for FuncEnvironment<'m
         func: &mut ir::Function,
         index: TypeIndex,
     ) -> WasmResult<ir::SigRef> {
-        let index = self.module.types[index];
+        let index = self.translation.module.types[index];
         let sig =
             crate::wasm_call_signature(self.isa, self.types[index].unwrap_func(), &self.tunables);
         Ok(func.import_signature(sig))
@@ -2088,7 +2108,7 @@ impl<'module_environment> cranelift_wasm::FuncEnvironment for FuncEnvironment<'m
         func: &mut ir::Function,
         index: FuncIndex,
     ) -> WasmResult<ir::FuncRef> {
-        let sig = self.module.functions[index].signature;
+        let sig = self.translation.module.functions[index].signature;
         let sig =
             crate::wasm_call_signature(self.isa, self.types[sig].unwrap_func(), &self.tunables);
         let signature = func.import_signature(sig);
@@ -2115,7 +2135,7 @@ impl<'module_environment> cranelift_wasm::FuncEnvironment for FuncEnvironment<'m
             // wasm module (e.g. imports or libcalls) are either encoded through
             // the `VMContext` as relative jumps (hence no relocations) or
             // they're libcalls with absolute relocations.
-            colocated: self.module.defined_func_index(index).is_some(),
+            colocated: self.translation.module.defined_func_index(index).is_some(),
         }))
     }
 
@@ -2219,9 +2239,9 @@ impl<'module_environment> cranelift_wasm::FuncEnvironment for FuncEnvironment<'m
     ) -> WasmResult<ir::Value> {
         let pointer_type = self.pointer_type();
         let vmctx = self.vmctx(&mut pos.func);
-        let is_shared = self.module.memory_plans[index].memory.shared;
+        let is_shared = self.translation.module.memory_plans[index].memory.shared;
         let base = pos.ins().global_value(pointer_type, vmctx);
-        let current_length_in_bytes = match self.module.defined_memory_index(index) {
+        let current_length_in_bytes = match self.translation.module.defined_memory_index(index) {
             Some(def_index) => {
                 if is_shared {
                     let offset =
@@ -2245,7 +2265,7 @@ impl<'module_environment> cranelift_wasm::FuncEnvironment for FuncEnvironment<'m
                         vmmemory_definition_ptr,
                     )
                 } else {
-                    let owned_index = self.module.owned_memory_index(def_index);
+                    let owned_index = self.translation.module.owned_memory_index(def_index);
                     let offset = i32::try_from(
                         self.offsets
                             .vmctx_vmmemory_definition_current_length(owned_index),
@@ -2281,7 +2301,11 @@ impl<'module_environment> cranelift_wasm::FuncEnvironment for FuncEnvironment<'m
             }
         };
 
-        let page_size_log2 = i64::from(self.module.memory_plans[index].memory.page_size_log2);
+        let page_size_log2 = i64::from(
+            self.translation.module.memory_plans[index]
+                .memory
+                .page_size_log2,
+        );
         let current_length_in_pages = pos.ins().ushr_imm(current_length_in_bytes, page_size_log2);
 
         Ok(self.convert_memory_length_to_index_type(pos, current_length_in_pages, index))
