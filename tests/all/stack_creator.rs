@@ -24,9 +24,6 @@ impl CustomStack {
     }
 }
 unsafe impl StackMemory for CustomStack {
-    fn top(&self) -> *mut u8 {
-        unsafe { self.base.as_ptr().add(self.len) }
-    }
     fn range(&self) -> Range<usize> {
         let base = self.base.as_ptr() as usize;
         base..base + self.len

@@ -48,14 +48,6 @@ impl FiberStack {
         Ok(Self(imp::FiberStack::from_raw_parts(bottom, len)?))
     }
 
-    /// Gets the top of the stack.
-    ///
-    /// Returns `None` if the platform does not support getting the top of the
-    /// stack.
-    pub fn top(&self) -> Option<*mut u8> {
-        self.0.top()
-    }
-
     /// Returns the range of where this stack resides in memory if the platform
     /// supports it.
     pub fn range(&self) -> Option<Range<usize>> {
@@ -81,8 +73,6 @@ pub unsafe trait RuntimeFiberStackCreator: Send + Sync {
 
 /// A fiber stack backed by custom memory.
 pub unsafe trait RuntimeFiberStack: Send + Sync {
-    /// The top of the allocated stack.
-    fn top(&self) -> *mut u8;
     /// The valid range of the stack without guard pages.
     fn range(&self) -> Range<usize>;
 }

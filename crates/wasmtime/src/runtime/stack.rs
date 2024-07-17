@@ -51,10 +51,6 @@ unsafe impl RuntimeFiberStackCreator for StackCreatorProxy {
 /// Note that this is a relatively new and experimental feature and it is
 /// recommended to be familiar with wasmtime runtime code to use it.
 pub unsafe trait StackMemory: Send + Sync {
-    /// The top of the allocated stack.
-    ///
-    /// This address should be page aligned.
-    fn top(&self) -> *mut u8;
     /// The range of where this stack resides in memory, excluding guard pages.
     fn range(&self) -> Range<usize>;
 }
@@ -62,10 +58,6 @@ pub unsafe trait StackMemory: Send + Sync {
 pub(crate) struct FiberStackProxy(pub Box<dyn StackMemory>);
 
 unsafe impl RuntimeFiberStack for FiberStackProxy {
-    fn top(&self) -> *mut u8 {
-        self.0.top()
-    }
-
     fn range(&self) -> Range<usize> {
         self.0.range()
     }

@@ -377,11 +377,6 @@ struct CHostStackMemory {
 unsafe impl Send for CHostStackMemory {}
 unsafe impl Sync for CHostStackMemory {}
 unsafe impl StackMemory for CHostStackMemory {
-    fn top(&self) -> *mut u8 {
-        let mut len = 0;
-        let cb = self.get_memory;
-        cb(self.foreign.data, &mut len)
-    }
     fn range(&self) -> Range<usize> {
         let mut len = 0;
         let cb = self.get_memory;

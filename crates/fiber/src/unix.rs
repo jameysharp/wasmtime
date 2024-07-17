@@ -107,8 +107,8 @@ impl FiberStack {
         })
     }
 
-    pub fn top(&self) -> Option<*mut u8> {
-        Some(self.base.wrapping_byte_add(self.len))
+    fn top(&self) -> *mut u8 {
+        self.base.wrapping_byte_add(self.len)
     }
 
     pub fn range(&self) -> Option<Range<usize>> {
@@ -215,7 +215,7 @@ impl Fiber {
     {
         unsafe {
             let data = Box::into_raw(Box::new(func)).cast();
-            wasmtime_fiber_init(stack.top().unwrap(), fiber_start::<F, A, B, C>, data);
+            wasmtime_fiber_init(stack.top(), fiber_start::<F, A, B, C>, data);
         }
 
         Ok(Self)
@@ -227,14 +227,10 @@ impl Fiber {
             // stack, otherwise known as our reserved slot for this information.
             //
             // In the diagram above this is updating address 0xAff8
-            let addr = stack.top().unwrap().cast::<usize>().offset(-1);
+            let addr = stack.top().cast::<usize>().offset(-1);
             addr.write(result as *const _ as usize);
 
-            asan::fiber_switch(
-                stack.top().unwrap(),
-                false,
-                &mut asan::PreviousStack::new(stack),
-            );
+            asan::fiber_switch(stack.top(), false, &mut asan::PreviousStack::new(stack));
 
             // null this out to help catch use-after-free
             addr.write(0);
@@ -438,10 +434,6 @@ mod asan {
     struct AsanFiberStack(ManuallyDrop<MmapFiberStack>);
 
     unsafe impl RuntimeFiberStack for AsanFiberStack {
-        fn top(&self) -> *mut u8 {
-            self.0.mapping_base.wrapping_byte_add(self.0.mapping_len)
-        }
-
         fn range(&self) -> Range<usize> {
             let base = self.0.mapping_base as usize;
             let end = base + self.0.mapping_len;

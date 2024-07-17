@@ -745,7 +745,8 @@ mod test {
                 let stack = allocator.allocate_fiber_stack()?;
 
                 // The stack pointer is at the top, so decrement it first
-                let addr = stack.top().unwrap().sub(1);
+                let addr = stack.range().unwrap().end - 1;
+                let addr = addr as *mut u8;
 
                 assert_eq!(*addr, 0);
                 *addr = 1;
@@ -779,7 +780,8 @@ mod test {
                 let stack = allocator.allocate_fiber_stack()?;
 
                 // The stack pointer is at the top, so decrement it first
-                let addr = stack.top().unwrap().sub(1);
+                let addr = stack.range().unwrap().end - 1;
+                let addr = addr as *mut u8;
 
                 assert_eq!(*addr, i);
                 *addr = i + 1;

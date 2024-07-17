@@ -138,8 +138,9 @@ impl StackPool {
         }
 
         let top = stack
-            .top()
-            .expect("fiber stack not allocated from the pool") as usize;
+            .range()
+            .expect("fiber stack not allocated from the pool")
+            .end;
 
         let base = self.mapping.as_ptr() as usize;
         let len = self.mapping.len();
@@ -186,8 +187,9 @@ impl StackPool {
         assert!(stack.is_from_raw_parts());
 
         let top = stack
-            .top()
-            .expect("fiber stack not allocated from the pool") as usize;
+            .range()
+            .expect("fiber stack not allocated from the pool")
+            .end;
 
         let base = self.mapping.as_ptr() as usize;
         let len = self.mapping.len();
@@ -242,7 +244,7 @@ mod tests {
         for i in 0..10 {
             let stack = pool.allocate().expect("allocation should succeed");
             assert_eq!(
-                ((stack.top().unwrap() as usize - base) / pool.stack_size) - 1,
+                ((stack.range().unwrap().end - base) / pool.stack_size) - 1,
                 i
             );
             stacks.push(stack);

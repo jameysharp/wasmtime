@@ -27,10 +27,6 @@ impl FiberStack {
         Err(io::Error::from_raw_os_error(ERROR_NOT_SUPPORTED as i32))
     }
 
-    pub fn top(&self) -> Option<*mut u8> {
-        None
-    }
-
     pub fn range(&self) -> Option<Range<usize>> {
         None
     }
