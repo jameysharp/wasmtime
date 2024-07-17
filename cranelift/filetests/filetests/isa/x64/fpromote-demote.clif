@@ -65,7 +65,7 @@ block0(v1: i64, v2: f32):
 ;   movq %rsp, %rbp
 ;   subq $0x10, %rsp
 ; block1: ; offset 0x8
-;   leaq (%rsp), %r8
+;   leaq (%rsp), %r8 ; trap: stk_ovf
 ;   movss %xmm0, (%r8) ; trap: heap_oob
 ;   xorpd %xmm0, %xmm0
 ;   cvtss2sd (%r8), %xmm0 ; trap: heap_oob
@@ -138,7 +138,7 @@ block0(v1: i64, v2: f64):
 ;   movq %rsp, %rbp
 ;   subq $0x10, %rsp
 ; block1: ; offset 0x8
-;   leaq (%rsp), %r8
+;   leaq (%rsp), %r8 ; trap: stk_ovf
 ;   movsd %xmm0, (%r8) ; trap: heap_oob
 ;   xorps %xmm0, %xmm0
 ;   cvtsd2ss (%r8), %xmm0 ; trap: heap_oob

@@ -1445,6 +1445,8 @@ pub(crate) fn emit(
         Inst::Push64 { src } => {
             let src = src.clone().to_reg_mem_imm().clone();
 
+            sink.add_trap(TrapCode::StackOverflow);
+
             match src {
                 RegMemImm::Reg { reg } => {
                     let enc_reg = int_reg_enc(reg);
@@ -1608,6 +1610,8 @@ pub(crate) fn emit(
                 sink.push_user_stack_map(state, offset, s);
             }
 
+            sink.add_trap(TrapCode::StackOverflow);
+
             sink.put1(0xE8);
             // The addend adjusts for the difference between the end of the instruction and the
             // beginning of the immediate field.
@@ -1672,6 +1676,8 @@ pub(crate) fn emit(
             info: call_info,
         } => {
             let dest = dest.clone();
+
+            sink.add_trap(TrapCode::StackOverflow);
 
             let start_offset = sink.cur_offset();
             match dest {

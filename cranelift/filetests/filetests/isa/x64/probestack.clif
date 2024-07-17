@@ -31,7 +31,7 @@ block0:
 ;   callq 0xe ; reloc_external CallPCRel4 %Probestack -4
 ;   subq $0x186a0, %rsp
 ; block1: ; offset 0x15
-;   leaq (%rsp), %rax
+;   leaq (%rsp), %rax ; trap: stk_ovf
 ;   addq $0x186a0, %rsp
 ;   movq %rbp, %rsp
 ;   popq %rbp

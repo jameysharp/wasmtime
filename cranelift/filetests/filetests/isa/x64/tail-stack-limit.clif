@@ -42,8 +42,8 @@ block0(v0: i64, v1: i8, v2: i8, v3: i8, v4: i8, v5: i8, v6: i8, v7: i8, v8: i128
 ;   ja 0x2b
 ;   subq $0x10, %rsp
 ; block1: ; offset 0x18
-;   movq 0x20(%rbp), %rax
-;   movq 0x28(%rbp), %rcx
+;   movq 0x20(%rbp), %rax ; trap: stk_ovf
+;   movq 0x28(%rbp), %rcx ; trap: stk_ovf
 ;   addq $0x10, %rsp
 ;   movq %rbp, %rsp
 ;   popq %rbp

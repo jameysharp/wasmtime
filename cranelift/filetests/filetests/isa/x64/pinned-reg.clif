@@ -61,12 +61,12 @@ block0:
 ;   pushq %rbp
 ;   movq %rsp, %rbp
 ;   subq $0x10, %rsp
-;   movq %rdi, (%rsp)
+;   movq %rdi, (%rsp) ; trap: stk_ovf
 ; block1: ; offset 0xc
 ;   movq %r15, %rdi
 ;   addq $1, %rdi
 ;   movq %rdi, %r15
-;   movq (%rsp), %rdi
+;   movq (%rsp), %rdi ; trap: stk_ovf
 ;   addq $0x10, %rsp
 ;   movq %rbp, %rsp
 ;   popq %rbp

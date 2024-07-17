@@ -201,9 +201,7 @@ impl EvexInstruction {
     /// - an optional immediate, if necessary (not currently implemented)
     pub fn encode(&self, sink: &mut MachBuffer<Inst>) {
         if let RegisterOrAmode::Amode(amode) = &self.rm {
-            if let Some(trap_code) = amode.get_flags().trap_code() {
-                sink.add_trap(trap_code);
-            }
+            amode.add_trap(sink);
         }
         sink.put4(self.bits);
         sink.put1(self.opcode);

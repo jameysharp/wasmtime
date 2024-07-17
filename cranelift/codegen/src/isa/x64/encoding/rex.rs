@@ -313,9 +313,7 @@ pub(crate) fn emit_std_enc_mem(
     // 64-bit integer registers, because they are part of an address
     // expression.  But `enc_g` can be derived from a register of any class.
 
-    if let Some(trap_code) = mem_e.get_flags().trap_code() {
-        sink.add_trap(trap_code);
-    }
+    mem_e.add_trap(sink);
 
     prefixes.emit(sink);
 

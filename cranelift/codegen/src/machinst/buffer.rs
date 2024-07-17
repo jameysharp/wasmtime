@@ -1613,10 +1613,13 @@ impl<I: VCodeInst> MachBuffer<I> {
 
     /// Add a trap record at the current offset.
     pub fn add_trap(&mut self, code: TrapCode) {
-        self.traps.push(MachTrap {
-            offset: self.data.len() as CodeOffset,
-            code,
-        });
+        let offset = self.data.len() as CodeOffset;
+        debug_assert!(self
+            .traps
+            .last()
+            .filter(|trap| trap.offset == offset)
+            .is_none());
+        self.traps.push(MachTrap { offset, code });
     }
 
     /// Add a call-site record at the current offset.

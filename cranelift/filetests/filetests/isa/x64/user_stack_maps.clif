@@ -81,9 +81,9 @@ block0:
 ;   pushq %rbp
 ;   movq %rsp, %rbp
 ;   subq $0x30, %rsp
-;   movq %rbx, 0x10(%rsp)
-;   movq %r13, 0x18(%rsp)
-;   movq %r15, 0x20(%rsp)
+;   movq %rbx, 0x10(%rsp) ; trap: stk_ovf
+;   movq %r13, 0x18(%rsp) ; trap: stk_ovf
+;   movq %r15, 0x20(%rsp) ; trap: stk_ovf
 ; block1: ; offset 0x17
 ;   xorl %edi, %edi
 ;   movq %rdi, %r15
@@ -91,29 +91,29 @@ block0:
 ;   movq %rdi, %rbx
 ;   movl $2, %edi
 ;   movq %rdi, %r13
-;   leaq (%rsp), %r11
+;   leaq (%rsp), %r11 ; trap: stk_ovf
 ;   movl $0, (%r11)
-;   leaq 4(%rsp), %rsi
+;   leaq 4(%rsp), %rsi ; trap: stk_ovf
 ;   movl $1, (%rsi)
-;   leaq 8(%rsp), %rdi
+;   leaq 8(%rsp), %rdi ; trap: stk_ovf
 ;   movl $2, (%rdi)
 ;   movq %r15, %rdi
 ;   callq 0x55 ; reloc_external CallPCRel4 u0:0 -4
-;   leaq (%rsp), %rcx
+;   leaq (%rsp), %rcx ; trap: stk_ovf
 ;   movl $1, (%rcx)
-;   leaq 4(%rsp), %rdx
+;   leaq 4(%rsp), %rdx ; trap: stk_ovf
 ;   movl $2, (%rdx)
 ;   movq %r15, %rdi
 ;   callq 0x72 ; reloc_external CallPCRel4 u0:0 -4
-;   leaq (%rsp), %r9
+;   leaq (%rsp), %r9 ; trap: stk_ovf
 ;   movl $2, (%r9)
 ;   movq %rbx, %rdi
 ;   callq 0x85 ; reloc_external CallPCRel4 u0:0 -4
 ;   movq %r13, %rdi
 ;   callq 0x8d ; reloc_external CallPCRel4 u0:0 -4
-;   movq 0x10(%rsp), %rbx
-;   movq 0x18(%rsp), %r13
-;   movq 0x20(%rsp), %r15
+;   movq 0x10(%rsp), %rbx ; trap: stk_ovf
+;   movq 0x18(%rsp), %r13 ; trap: stk_ovf
+;   movq 0x20(%rsp), %r15 ; trap: stk_ovf
 ;   addq $0x30, %rsp
 ;   movq %rbp, %rsp
 ;   popq %rbp
@@ -194,31 +194,31 @@ block0(v0: i8, v1: i16, v2: i32, v3: i64, v4: f32, v5: f64):
 ;   pushq %rbp
 ;   movq %rsp, %rbp
 ;   subq $0xb0, %rsp
-;   movq %rbx, 0x80(%rsp)
-;   movq %r12, 0x88(%rsp)
-;   movq %r13, 0x90(%rsp)
-;   movq %r14, 0x98(%rsp)
-;   movq %r15, 0xa0(%rsp)
+;   movq %rbx, 0x80(%rsp) ; trap: stk_ovf
+;   movq %r12, 0x88(%rsp) ; trap: stk_ovf
+;   movq %r13, 0x90(%rsp) ; trap: stk_ovf
+;   movq %r14, 0x98(%rsp) ; trap: stk_ovf
+;   movq %r15, 0xa0(%rsp) ; trap: stk_ovf
 ; block1: ; offset 0x33
 ;   movq %r8, %r13
-;   leaq (%rsp), %r8
+;   leaq (%rsp), %r8 ; trap: stk_ovf
 ;   movb %dil, (%r8)
 ;   movq %rdi, %rbx
-;   leaq 8(%rsp), %r8
+;   leaq 8(%rsp), %r8 ; trap: stk_ovf
 ;   movw %si, (%r8)
 ;   movq %rsi, %r14
-;   leaq 0x10(%rsp), %r9
+;   leaq 0x10(%rsp), %r9 ; trap: stk_ovf
 ;   movl %edx, (%r9)
 ;   movq %rdx, %r12
-;   leaq 0x14(%rsp), %r10
+;   leaq 0x14(%rsp), %r10 ; trap: stk_ovf
 ;   movss %xmm0, (%r10)
-;   movdqu %xmm0, 0x60(%rsp)
-;   leaq 0x18(%rsp), %r11
+;   movdqu %xmm0, 0x60(%rsp) ; trap: stk_ovf
+;   leaq 0x18(%rsp), %r11 ; trap: stk_ovf
 ;   movq %rcx, (%r11)
 ;   movq %rcx, %r15
-;   leaq 0x20(%rsp), %rsi
+;   leaq 0x20(%rsp), %rsi ; trap: stk_ovf
 ;   movsd %xmm1, (%rsi)
-;   movdqu %xmm1, 0x70(%rsp)
+;   movdqu %xmm1, 0x70(%rsp) ; trap: stk_ovf
 ;   callq 0x86 ; reloc_external CallPCRel4 u0:0 -4
 ;   movq %r12, %rdx
 ;   movq %r13, %r8
@@ -227,13 +227,13 @@ block0(v0: i8, v1: i16, v2: i32, v3: i64, v4: f32, v5: f64):
 ;   movq %rcx, 8(%r8)
 ;   movq %rbx, %rax
 ;   movq %r14, %rdx
-;   movdqu 0x60(%rsp), %xmm0
-;   movdqu 0x70(%rsp), %xmm1
-;   movq 0x80(%rsp), %rbx
-;   movq 0x88(%rsp), %r12
-;   movq 0x90(%rsp), %r13
-;   movq 0x98(%rsp), %r14
-;   movq 0xa0(%rsp), %r15
+;   movdqu 0x60(%rsp), %xmm0 ; trap: stk_ovf
+;   movdqu 0x70(%rsp), %xmm1 ; trap: stk_ovf
+;   movq 0x80(%rsp), %rbx ; trap: stk_ovf
+;   movq 0x88(%rsp), %r12 ; trap: stk_ovf
+;   movq 0x90(%rsp), %r13 ; trap: stk_ovf
+;   movq 0x98(%rsp), %r14 ; trap: stk_ovf
+;   movq 0xa0(%rsp), %r15 ; trap: stk_ovf
 ;   addq $0xb0, %rsp
 ;   movq %rbp, %rsp
 ;   popq %rbp

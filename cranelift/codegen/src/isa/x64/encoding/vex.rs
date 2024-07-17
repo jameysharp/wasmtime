@@ -250,9 +250,7 @@ impl VexInstruction {
     /// Emit the VEX-encoded instruction to the provided buffer.
     pub fn encode(&self, sink: &mut MachBuffer<Inst>) {
         if let RegisterOrAmode::Amode(amode) = &self.rm {
-            if let Some(trap_code) = amode.get_flags().trap_code() {
-                sink.add_trap(trap_code);
-            }
+            amode.add_trap(sink);
         }
 
         // 2/3 byte prefix

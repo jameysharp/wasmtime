@@ -33,7 +33,7 @@ block0:
 ;   movq %rsp, %rbp
 ;   subq $0x2000, %rsp
 ; block1: ; offset 0xb
-;   leaq (%rsp), %rax
+;   leaq (%rsp), %rax ; trap: stk_ovf
 ;   addq $0x2000, %rsp
 ;   movq %rbp, %rsp
 ;   popq %rbp
@@ -70,15 +70,15 @@ block0:
 ;   pushq %rbp
 ;   movq %rsp, %rbp
 ;   subq $0x10000, %rsp
-;   movl %esp, (%rsp)
+;   movl %esp, (%rsp) ; trap: stk_ovf
 ;   subq $0x10000, %rsp
-;   movl %esp, (%rsp)
+;   movl %esp, (%rsp) ; trap: stk_ovf
 ;   subq $0x10000, %rsp
-;   movl %esp, (%rsp)
+;   movl %esp, (%rsp) ; trap: stk_ovf
 ;   addq $0x30000, %rsp
 ;   subq $0x30000, %rsp
 ; block1: ; offset 0x30
-;   leaq (%rsp), %rax
+;   leaq (%rsp), %rax ; trap: stk_ovf
 ;   addq $0x30000, %rsp
 ;   movq %rbp, %rsp
 ;   popq %rbp
@@ -111,13 +111,13 @@ block0:
 ;   movq %rsp, %r11
 ;   subq $0x200000, %r11
 ;   subq $0x10000, %rsp
-;   movl %esp, (%rsp)
+;   movl %esp, (%rsp) ; trap: stk_ovf
 ;   cmpq %rsp, %r11
 ;   jne 0xe
 ;   addq $0x200000, %rsp
 ;   subq $0x200000, %rsp
 ; block1: ; offset 0x2f
-;   leaq (%rsp), %rax
+;   leaq (%rsp), %rax ; trap: stk_ovf
 ;   addq $0x200000, %rsp
 ;   movq %rbp, %rsp
 ;   popq %rbp

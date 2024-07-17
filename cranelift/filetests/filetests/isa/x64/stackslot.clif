@@ -47,10 +47,10 @@ block0(v0: i64):
 ;   ja 0x3b
 ;   subq $0x30, %rsp
 ; block1: ; offset 0x18
-;   leaq (%rsp), %rax
-;   leaq 0x10(%rsp), %rdx
-;   leaq 0x20(%rsp), %r8
-;   leaq 0x28(%rsp), %r9
+;   leaq (%rsp), %rax ; trap: stk_ovf
+;   leaq 0x10(%rsp), %rdx ; trap: stk_ovf
+;   leaq 0x20(%rsp), %r8 ; trap: stk_ovf
+;   leaq 0x28(%rsp), %r9 ; trap: stk_ovf
 ;   movq %r8, (%rsi)
 ;   movq %r9, 8(%rsi)
 ;   addq $0x30, %rsp

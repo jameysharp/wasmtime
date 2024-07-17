@@ -400,6 +400,20 @@ impl Amode {
         }
     }
 
+    pub(crate) fn add_trap(&self, sink: &mut MachBuffer<Inst>) {
+        let (base, flags) = match *self {
+            Amode::ImmReg { base, flags, .. } => (base, flags),
+            Amode::ImmRegRegShift { base, flags, .. } => (base.to_reg(), flags),
+            Amode::RipRelative { .. } => return,
+        };
+        if base == regs::rsp() || base == regs::rbp() {
+            sink.add_trap(crate::ir::TrapCode::StackOverflow);
+        }
+        if let Some(trap_code) = flags.trap_code() {
+            sink.add_trap(trap_code);
+        }
+    }
+
     pub(crate) fn get_flags(&self) -> MemFlags {
         match self {
             Amode::ImmReg { flags, .. } | Amode::ImmRegRegShift { flags, .. } => *flags,

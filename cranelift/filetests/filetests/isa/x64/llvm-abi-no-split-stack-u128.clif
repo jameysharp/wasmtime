@@ -22,8 +22,8 @@ block0(v0: i64, v1: i128, v2: i128, v3: i128):
 ;   pushq %rbp
 ;   movq %rsp, %rbp
 ; block1: ; offset 0x4
-;   movq 0x10(%rbp), %rax
-;   movq 0x18(%rbp), %rdx
+;   movq 0x10(%rbp), %rax ; trap: stk_ovf
+;   movq 0x18(%rbp), %rdx ; trap: stk_ovf
 ;   movq %rbp, %rsp
 ;   popq %rbp
 ;   retq

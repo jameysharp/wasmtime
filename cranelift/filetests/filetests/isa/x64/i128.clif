@@ -390,11 +390,11 @@ block0(v0: i128, v1: i128):
 ;   pushq %rbp
 ;   movq %rsp, %rbp
 ;   subq $0x30, %rsp
-;   movq %rbx, (%rsp)
-;   movq %r12, 8(%rsp)
-;   movq %r13, 0x10(%rsp)
-;   movq %r14, 0x18(%rsp)
-;   movq %r15, 0x20(%rsp)
+;   movq %rbx, (%rsp) ; trap: stk_ovf
+;   movq %r12, 8(%rsp) ; trap: stk_ovf
+;   movq %r13, 0x10(%rsp) ; trap: stk_ovf
+;   movq %r14, 0x18(%rsp) ; trap: stk_ovf
+;   movq %r15, 0x20(%rsp) ; trap: stk_ovf
 ; block1: ; offset 0x20
 ;   movq %rdi, %rax
 ;   xorq %rdx, %rax
@@ -448,11 +448,11 @@ block0(v0: i128, v1: i128):
 ;   andl %r13d, %r10d
 ;   andl %r10d, %eax
 ;   andl %r15d, %eax
-;   movq (%rsp), %rbx
-;   movq 8(%rsp), %r12
-;   movq 0x10(%rsp), %r13
-;   movq 0x18(%rsp), %r14
-;   movq 0x20(%rsp), %r15
+;   movq (%rsp), %rbx ; trap: stk_ovf
+;   movq 8(%rsp), %r12 ; trap: stk_ovf
+;   movq 0x10(%rsp), %r13 ; trap: stk_ovf
+;   movq 0x18(%rsp), %r14 ; trap: stk_ovf
+;   movq 0x20(%rsp), %r15 ; trap: stk_ovf
 ;   addq $0x30, %rsp
 ;   movq %rbp, %rsp
 ;   popq %rbp
@@ -1217,18 +1217,18 @@ block0(v0: i128, v1: i128, v2: i64, v3: i128, v4: i128, v5: i128):
 ;   pushq %rbp
 ;   movq %rsp, %rbp
 ;   subq $0x20, %rsp
-;   movq %rbx, (%rsp)
-;   movq %r13, 8(%rsp)
-;   movq %r14, 0x10(%rsp)
-;   movq %r15, 0x18(%rsp)
+;   movq %rbx, (%rsp) ; trap: stk_ovf
+;   movq %r13, 8(%rsp) ; trap: stk_ovf
+;   movq %r14, 0x10(%rsp) ; trap: stk_ovf
+;   movq %r15, 0x18(%rsp) ; trap: stk_ovf
 ; block1: ; offset 0x1b
 ;   movq %rdx, %rbx
 ;   movq %rcx, %r14
-;   movq 0x10(%rbp), %rcx
-;   movq 0x18(%rbp), %rax
-;   movq 0x20(%rbp), %rdx
-;   movq 0x28(%rbp), %r11
-;   movq 0x30(%rbp), %r10
+;   movq 0x10(%rbp), %rcx ; trap: stk_ovf
+;   movq 0x18(%rbp), %rax ; trap: stk_ovf
+;   movq 0x20(%rbp), %rdx ; trap: stk_ovf
+;   movq 0x28(%rbp), %r11 ; trap: stk_ovf
+;   movq 0x30(%rbp), %r10 ; trap: stk_ovf
 ;   addq %rbx, %rdi
 ;   movq %r14, %r15
 ;   adcq %r15, %rsi
@@ -1241,10 +1241,10 @@ block0(v0: i128, v1: i128, v2: i64, v3: i128, v4: i128, v5: i128):
 ;   adcq %rcx, %rsi
 ;   addq %rdi, %rax
 ;   adcq %rsi, %rdx
-;   movq (%rsp), %rbx
-;   movq 8(%rsp), %r13
-;   movq 0x10(%rsp), %r14
-;   movq 0x18(%rsp), %r15
+;   movq (%rsp), %rbx ; trap: stk_ovf
+;   movq 8(%rsp), %r13 ; trap: stk_ovf
+;   movq 0x10(%rsp), %r14 ; trap: stk_ovf
+;   movq 0x18(%rsp), %r15 ; trap: stk_ovf
 ;   addq $0x20, %rsp
 ;   movq %rbp, %rsp
 ;   popq %rbp
@@ -1326,16 +1326,16 @@ block0(v0: i128, v1: i128):
 ;   pushq %rbp
 ;   movq %rsp, %rbp
 ;   subq $0x20, %rsp
-;   movq %r13, 0x10(%rsp)
+;   movq %r13, 0x10(%rsp) ; trap: stk_ovf
 ; block1: ; offset 0xd
 ;   movq %r8, %r13
-;   leaq (%rsp), %r8
+;   leaq (%rsp), %r8 ; trap: stk_ovf
 ;   movabsq $0, %r9 ; reloc_external Abs8 %g 0
 ;   callq *%r9
-;   movq (%rsp), %r8
+;   movq (%rsp), %r8 ; trap: stk_ovf
 ;   movq %r13, %r10
 ;   movq %r8, (%r10)
-;   movq 0x10(%rsp), %r13
+;   movq 0x10(%rsp), %r13 ; trap: stk_ovf
 ;   addq $0x20, %rsp
 ;   movq %rbp, %rsp
 ;   popq %rbp
