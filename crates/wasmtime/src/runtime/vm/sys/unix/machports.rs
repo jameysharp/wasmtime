@@ -368,8 +368,13 @@ unsafe extern "C" fn unwind(
             0 => None,
             _ => Some(fault2),
         };
+        let details = TrapDetails {
+            pc: wasm_pc as usize,
+            fp: wasm_fp,
+            faulting_addr,
+        };
         let trap = Trap::from_u8(trap).unwrap();
-        state.set_jit_trap(wasm_pc, wasm_fp, faulting_addr, trap);
+        state.set_jit_trap(details, trap);
         state.take_jmp_buf()
     });
     debug_assert!(!jmp_buf.is_null());

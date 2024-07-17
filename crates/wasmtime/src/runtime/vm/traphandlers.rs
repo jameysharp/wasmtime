@@ -206,6 +206,12 @@ impl From<wasmtime_environ::Trap> for TrapReason {
     }
 }
 
+pub(crate) struct TrapDetails {
+    pub pc: usize,
+    pub fp: usize,
+    pub faulting_addr: Option<usize>,
+}
+
 /// Return value from `test_if_trap`.
 pub(crate) enum TrapTest {
     /// Not a wasm trap, need to delegate to whatever process handler is next.
@@ -217,8 +223,6 @@ pub(crate) enum TrapTest {
     Trap {
         /// How to longjmp back to the original wasm frame.
         jmp_buf: *const u8,
-        /// The trap code of this trap.
-        trap: wasmtime_environ::Trap,
     },
 }
 
@@ -442,7 +446,7 @@ impl CallThreadState {
     #[cfg_attr(miri, allow(dead_code))] // miri doesn't handle traps yet
     pub(crate) fn test_if_trap(
         &self,
-        pc: *const u8,
+        details: TrapDetails,
         call_handler: impl Fn(&SignalHandler) -> bool,
     ) -> TrapTest {
         // If we haven't even started to handle traps yet, bail out.
@@ -460,16 +464,17 @@ impl CallThreadState {
         }
 
         // If this fault wasn't in wasm code, then it's not our problem
-        let trap = match unsafe { GET_WASM_TRAP(pc as usize) } {
+        let trap = match unsafe { GET_WASM_TRAP(details.pc) } {
             Some(trap) => trap,
             None => return TrapTest::NotWasm,
         };
+
+        self.set_jit_trap(details, trap);
 
         // If all that passed then this is indeed a wasm trap, so return the
         // `jmp_buf` passed to `wasmtime_longjmp` to resume.
         TrapTest::Trap {
             jmp_buf: self.take_jmp_buf(),
-            trap,
         }
     }
 
@@ -478,19 +483,18 @@ impl CallThreadState {
     }
 
     #[cfg_attr(miri, allow(dead_code))] // miri doesn't handle traps yet
-    pub(crate) fn set_jit_trap(
-        &self,
-        pc: *const u8,
-        fp: usize,
-        faulting_addr: Option<usize>,
-        trap: wasmtime_environ::Trap,
-    ) {
-        let backtrace = self.capture_backtrace(self.limits, Some((pc as usize, fp)));
-        let coredump = self.capture_coredump(self.limits, Some((pc as usize, fp)));
+    pub(crate) fn set_jit_trap(&self, details: TrapDetails, trap: wasmtime_environ::Trap) {
+        let TrapDetails {
+            pc,
+            fp,
+            faulting_addr,
+        } = details;
+        let backtrace = self.capture_backtrace(self.limits, Some((pc, fp)));
+        let coredump = self.capture_coredump(self.limits, Some((pc, fp)));
         unsafe {
             (*self.unwind.get()).as_mut_ptr().write((
                 UnwindReason::Trap(TrapReason::Jit {
-                    pc: pc as usize,
+                    pc,
                     faulting_addr,
                     trap,
                 }),

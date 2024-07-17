@@ -26,7 +26,7 @@ pub fn platform_init(_macos_use_mach_ports: bool) {
     }
 }
 
-extern "C" fn handle_trap(ip: usize, fp: usize, has_faulting_addr: bool, faulting_addr: usize) {
+extern "C" fn handle_trap(pc: usize, fp: usize, has_faulting_addr: bool, faulting_addr: usize) {
     tls::with(|info| {
         let info = match info {
             Some(info) => info,
@@ -37,17 +37,18 @@ extern "C" fn handle_trap(ip: usize, fp: usize, has_faulting_addr: bool, faultin
         } else {
             None
         };
-        let ip = ip as *const u8;
-        let test = info.test_if_trap(ip, |_handler| {
+        let details = TrapDetails {
+            pc,
+            fp,
+            faulting_addr,
+        };
+        let test = info.test_if_trap(details, |_handler| {
             panic!("custom signal handlers are not supported on this platform");
         });
         match test {
             TrapTest::NotWasm => {}
             TrapTest::HandledByEmbedder => unreachable!(),
-            TrapTest::Trap { jmp_buf, trap } => {
-                info.set_jit_trap(ip, fp, faulting_addr, trap);
-                unsafe { wasmtime_longjmp(jmp_buf) }
-            }
+            TrapTest::Trap { jmp_buf } => unsafe { wasmtime_longjmp(jmp_buf) },
         }
     })
 }

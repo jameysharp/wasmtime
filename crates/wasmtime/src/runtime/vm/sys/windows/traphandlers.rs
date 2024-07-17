@@ -1,4 +1,4 @@
-use crate::runtime::vm::traphandlers::{tls, TrapTest};
+use crate::runtime::vm::traphandlers::{tls, TrapDetails, TrapTest};
 use crate::runtime::vm::VMContext;
 use std::io;
 use windows_sys::Win32::Foundation::*;
@@ -88,13 +88,15 @@ unsafe extern "system" fn exception_handler(exception_info: *mut EXCEPTION_POINT
         } else {
             None
         };
-        match info.test_if_trap(ip, |handler| handler(exception_info)) {
+        let details = TrapDetails {
+            pc: ip as usize,
+            fp,
+            faulting_addr,
+        };
+        match info.test_if_trap(details, |handler| handler(exception_info)) {
             TrapTest::NotWasm => ExceptionContinueSearch,
             TrapTest::HandledByEmbedder => ExceptionContinueExecution,
-            TrapTest::Trap { jmp_buf, trap } => {
-                info.set_jit_trap(ip, fp, faulting_addr, trap);
-                wasmtime_longjmp(jmp_buf)
-            }
+            TrapTest::Trap { jmp_buf } => wasmtime_longjmp(jmp_buf),
         }
     })
 }
