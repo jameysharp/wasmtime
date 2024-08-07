@@ -222,6 +222,7 @@ impl From<wasmtime_environ::Trap> for TrapReason {
 pub(crate) struct TrapRegisters {
     pub pc: usize,
     pub fp: usize,
+    pub sp: usize,
 }
 
 /// Return value from `test_if_trap`.
