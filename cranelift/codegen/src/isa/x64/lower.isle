@@ -3385,7 +3385,7 @@
       (let ((size OperandSize (raw_operand_size_of_type ty))
             (jt_size u32 (jump_table_size jt_targets))
             (size_reg Reg (imm ty (u32_as_u64 jt_size)))
-            (idx_reg Gpr (extend_to_gpr idx $I64 (ExtendKind.Zero)))
+            (idx_reg Gpr (put_in_gpr idx))
             (clamped_idx Reg (with_flags_reg
               (x64_cmp size idx_reg size_reg)
               (cmove ty (CC.B) idx_reg size_reg))))
